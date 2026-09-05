@@ -228,4 +228,5 @@ def add_ict_features(df: pd.DataFrame, swing: int = 3) -> pd.DataFrame:
     out["premium_discount"] = premium_discount
     out["disp_up"] = disp_up
     out["disp_down"] = disp_down
+
     return out

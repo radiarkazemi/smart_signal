@@ -20,6 +20,8 @@ from smart_signal.data.dataset import (
     valid_indices,
 )
 from smart_signal.labels.next_candle import decode_next_ohlc
+from smart_signal.structure_prior import calibrate_candle_probs, calibrate_path
+from smart_signal.candle_blend import blend_candle_probs
 from smart_signal.models.goldnet import build_goldnet, count_parameters
 from smart_signal.policy import apply_trade_cooldown, decide_direction
 from smart_signal.train import class_weights, prepare_frames, run_epoch, set_seed
@@ -187,6 +189,10 @@ def predict_holdout(
     spread = float((cfg.get("backtest") or {}).get("spread_usd", inf.get("spread_usd", 0.35)))
     horizon = int(label_cfg.get("horizon", 10))
     cooldown = int(inf.get("trade_cooldown_bars", 6))
+    struct_candle_s = float(inf.get("structure_candle_strength", 0.0))
+    struct_path_s = float(inf.get("structure_path_strength", 0.18))
+    struct_min_abs = float(inf.get("structure_min_abs_score", 0.45))
+
     tp_atr = float(label_cfg.get("tp_atr", label_cfg.get("tp_atr", 1.55)))
     sl_atr = float(label_cfg.get("sl_atr", label_cfg.get("sl_atr", 1.55)))
 
@@ -198,6 +204,11 @@ def predict_holdout(
     htf_align = (
         sig["htf_trend_align"].to_numpy(dtype=np.float64)
         if "htf_trend_align" in sig.columns
+        else np.zeros(len(sig))
+    )
+    premium_discount = (
+        sig["premium_discount"].to_numpy(dtype=np.float64)
+        if "premium_discount" in sig.columns
         else np.zeros(len(sig))
     )
     times = pd.to_datetime(sig["time"], utc=True)
@@ -267,10 +278,30 @@ def predict_holdout(
             exit_px = price * float(np.exp(ret[i]))
             pnl = direction * (exit_px - price) - (spread if direction != 0 else 0.0)
 
-            candle_cls = int(np.argmax(candle_probs[i]))
+            # ICT/MTF prior teaches next-candle bull/bear + OHLC path at inference.
+            cal_candle = calibrate_candle_probs(
+                candle_probs[i],
+                ms_bias=float(ms_bias[src_i]),
+                htf_trend_align=float(htf_align[src_i]),
+                premium_discount=float(premium_discount[src_i]),
+                strength=struct_candle_s,
+                min_abs_score=struct_min_abs,
+            )
+            cal_candle = blend_candle_probs(cal_candle, sig.iloc[src_i])
+            candle_cls = int(np.argmax(cal_candle))
             true_candle = int(y_candle[i])
+            cal_up, cal_dn, cal_loc = calibrate_path(
+                float(pred_up[i]),
+                float(pred_dn[i]),
+                float(pred_loc[i]),
+                ms_bias=float(ms_bias[src_i]),
+                htf_trend_align=float(htf_align[src_i]),
+                premium_discount=float(premium_discount[src_i]),
+                strength=struct_path_s,
+                min_abs_score=struct_min_abs,
+            )
             pred_hi, pred_lo, pred_cl = decode_next_ohlc(
-                price, atr_v, float(pred_up[i]), float(pred_dn[i]), float(pred_loc[i])
+                price, atr_v, cal_up, cal_dn, cal_loc
             )
             _th, _tl, true_cl = decode_next_ohlc(
                 price, atr_v, float(y_up_t[i]), float(y_dn_t[i]), float(y_loc_t[i])
@@ -343,6 +374,8 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
     wins = [r for r in trades if r.get("win")]
     candle_n = sum(1 for r in rows if r.get("candle_correct") is not None)
     candle_ok = sum(1 for r in rows if r.get("candle_correct"))
+    bull_bear_rows = [r for r in rows if r.get("candle_actual") in {"BULLISH", "BEARISH"}]
+    bull_bear_ok = sum(1 for r in bull_bear_rows if r.get("candle_correct"))
     close_maes = [float(r["close_mae"]) for r in rows if r.get("close_mae") is not None]
     widths = [float(r["pred_range_width"]) for r in rows if r.get("pred_range_width") is not None]
     by_day: dict[str, Any] = {}
@@ -351,6 +384,7 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
         day_trades = [r for r in day_rows if r["signal"] in {"BUY", "SELL"}]
         day_wins = [r for r in day_trades if r.get("win")]
         day_side = [r for r in day_rows if r.get("side_correct") is not None]
+        day_bb = [r for r in day_rows if r.get("candle_actual") in {"BULLISH", "BEARISH"}]
         by_day[day] = {
             "bars": len(day_rows),
             "direction_accuracy": round(
@@ -367,6 +401,10 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
             ),
             "candle_accuracy": round(
                 (sum(1 for r in day_rows if r.get("candle_correct")) / len(day_rows)) if day_rows else 0.0,
+                4,
+            ),
+            "bull_bear_accuracy": round(
+                (sum(1 for r in day_bb if r.get("candle_correct")) / len(day_bb)) if day_bb else 0.0,
                 4,
             ),
             "trades": len(day_trades),
@@ -387,6 +425,7 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
         "raw_direction_accuracy": round((n_raw / n) if n else 0.0, 4),
         "side_accuracy": round((n_side / len(side_rows)) if side_rows else 0.0, 4),
         "candle_accuracy": round((candle_ok / candle_n) if candle_n else 0.0, 4),
+        "bull_bear_accuracy": round((bull_bear_ok / len(bull_bear_rows)) if bull_bear_rows else 0.0, 4),
         "avg_close_mae": round(float(np.mean(close_maes)) if close_maes else 0.0, 3),
         "avg_pred_range_width": round(float(np.mean(widths)) if widths else 0.0, 3),
         "ohlc_ok_rate": round((sum(1 for r in rows if r.get("ohlc_ok")) / n) if n else 0.0, 4),

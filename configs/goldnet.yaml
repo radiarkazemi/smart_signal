@@ -9,67 +9,65 @@ timeframes:
     lookback: 42
   1d:
     lookback: 32
-
 features:
-  - log_ret
-  - rng_pct
-  - body_pct
-  - upper_wick
-  - lower_wick
-  - rsi_14
-  - rsi_28
-  - macd
-  - macd_sig
-  - macd_hist
-  - bb_pct
-  - bb_width
-  - atr_pct
-  - stoch_k
-  - stoch_d
-  - ema_gap_fast
-  - ema_gap_slow
-  - rv_20
-  - hour_sin
-  - hour_cos
-  - dow_sin
-  - dow_cos
-  - close_loc
-  - open_loc
-  - gap_pct
-  - bull_bear
-  - consec_dir
-  - engulf
-  - inside_bar
-  - outside_bar
-  - doji
-  - pin_up
-  - pin_down
-  - marubozu
-  - wick_imbalance
-  - path_olhc
-  - ms_bias
-  - bos
-  - choch
-  - fvg_up
-  - fvg_down
-  - fvg_mid_dist
-  - ob_bull_dist
-  - ob_bear_dist
-  - liq_sweep_hi
-  - liq_sweep_lo
-  - eq_highs
-  - eq_lows
-  - premium_discount
-  - disp_up
-  - disp_down
-  - htf_open_dist
-  - htf_mid_dist
-  - htf_range_loc
-  - htf_trend_align
-  - htf_same_dir
-  - parent_body
-  - nested_pos
-
+- log_ret
+- rng_pct
+- body_pct
+- upper_wick
+- lower_wick
+- rsi_14
+- rsi_28
+- macd
+- macd_sig
+- macd_hist
+- bb_pct
+- bb_width
+- atr_pct
+- stoch_k
+- stoch_d
+- ema_gap_fast
+- ema_gap_slow
+- rv_20
+- hour_sin
+- hour_cos
+- dow_sin
+- dow_cos
+- close_loc
+- open_loc
+- gap_pct
+- bull_bear
+- consec_dir
+- engulf
+- inside_bar
+- outside_bar
+- doji
+- pin_up
+- pin_down
+- marubozu
+- wick_imbalance
+- path_olhc
+- ms_bias
+- bos
+- choch
+- fvg_up
+- fvg_down
+- fvg_mid_dist
+- ob_bull_dist
+- ob_bear_dist
+- liq_sweep_hi
+- liq_sweep_lo
+- eq_highs
+- eq_lows
+- premium_discount
+- disp_up
+- disp_down
+- htf_open_dist
+- htf_mid_dist
+- htf_range_loc
+- htf_trend_align
+- htf_same_dir
+- parent_body
+- nested_pos
 model:
   d_model: 64
   d_hidden: 128
@@ -79,21 +77,18 @@ model:
   n_transformer_layers: 2
   dropout: 0.12
   gru_layers: 1
-
 label:
   atr_period: 14
-  # Symmetric barriers → less sell-label bias, cleaner triple-barrier targets.
   tp_atr: 1.55
   sl_atr: 1.55
   horizon: 10
   min_atr_pct: 0.00045
   flat_body_pct: 0.08
-
 train:
   batch_size: 48
-  epochs: 36
-  lr: 0.00026
-  weight_decay: 0.0005
+  epochs: 5
+  lr: 0.00012
+  weight_decay: 8.0e-05
   warmup_frac: 0.08
   grad_clip: 1.0
   val_frac: 0.18
@@ -102,18 +97,23 @@ train:
   seed: 42
   focal_gamma: 2.2
   label_smoothing: 0.04
-  # Direction is the trade signal — keep candle/path as auxiliaries, not dominant.
-  return_loss_w: 0.35
-  candle_loss_w: 0.22
-  path_loss_w: 0.18
-  vol_loss_w: 0.10
-  patience: 14
-  # Checkpoint score: favor direction accuracy over candle auxiliary.
-  candle_ckpt_w: 0.10
-
+  return_loss_w: 0.22
+  candle_loss_w: 0.4
+  path_loss_w: 0.32
+  consistency_loss_w: 0.18
+  vol_loss_w: 0.06
+  patience: 4
+  candle_ckpt_w: 0.4
+  bull_bear_ckpt_w: 0.3
+  close_loc_ckpt_w: 0.15
+  learning_rate: 0.00012
+  dir_loss_w: 0.85
+  magnitude_loss_w: 0.55
+  conf_loss_w: 0.12
+  early_stop_patience: 4
+  price_loss_w: 0.35
+  struct_loss_w: 0.12
 inference:
-  # Selective gates tuned on holdout: fewer trades, higher win-rate.
-  # Production model side-acc ~64%; these gates lift trade WR to ~72-88%.
   hold_threshold: 0.34
   min_confidence: 0.44
   min_edge: 0.08
@@ -125,7 +125,9 @@ inference:
   probability_temperature: 1.0
   trade_cooldown_bars: 8
   spread_usd: 0.35
-
+  structure_candle_strength: 0.0
+  structure_path_strength: 0.18
+  structure_min_abs_score: 0.45
 backtest:
   start_usd: 10000
   risk_frac: 0.004

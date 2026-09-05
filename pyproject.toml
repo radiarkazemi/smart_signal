@@ -9,6 +9,7 @@ description = "Multi-timeframe deep-learning buy/sell signals for XAUUSD gold."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "joblib>=1.3",
   "torch>=2.2",
   "pandas>=2.1",
   "numpy>=1.26",
