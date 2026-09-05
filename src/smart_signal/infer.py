@@ -204,4 +204,6 @@ def _explain(out: dict[str, torch.Tensor], probs: np.ndarray, signal: str) -> li
 
 
 def signal_to_dict(sig: Signal) -> dict[str, Any]:
-    return asdict(sig)
+    data = asdict(sig)
+    data["signal_with_price"] = f"{sig.signal} @ {sig.price:.2f}"
+    return data

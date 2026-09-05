@@ -115,14 +115,19 @@ def create_app() -> FastAPI:
         import json
 
         out: dict = {}
-        path = artifacts_dir() / "backtest.json"
-        train = artifacts_dir() / "train_metrics.json"
-        if path.exists():
-            out["backtest"] = json.loads(path.read_text(encoding="utf-8"))
-        if train.exists():
-            payload = json.loads(train.read_text(encoding="utf-8"))
-            payload.pop("history", None)
-            out["train"] = payload
+        for name in ("backtest.json", "walkforward.json", "train_metrics.json"):
+            path = artifacts_dir() / name
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if name == "train_metrics.json":
+                payload.pop("history", None)
+                out["train"] = payload
+            elif name == "walkforward.json":
+                out["walkforward"] = payload.get("summary") or payload
+                out["walkforward_signals"] = (payload.get("signals") or [])[:20]
+            else:
+                out["backtest"] = payload
         out["latest_signal"] = latest_signal()
         return out or {"detail": "no metrics yet"}
 

@@ -128,14 +128,21 @@
     <section class="card">
       <h2 style="margin:0 0 8px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Results</h2>
       <div class="grid3" id="results">
-        <div class="kv"><span>Val accuracy</span><b id="vacc">—</b></div>
+        <div class="kv"><span>Holdout days</span><b id="hdays">—</b></div>
+        <div class="kv"><span>Direction accuracy</span><b id="vacc">—</b></div>
+        <div class="kv"><span>Trade win rate</span><b id="wr">—</b></div>
         <div class="kv"><span>Holdout trades</span><b id="ntr">—</b></div>
-        <div class="kv"><span>Win rate</span><b id="wr">—</b></div>
-        <div class="kv"><span>Backtest return</span><b id="ret">—</b></div>
-        <div class="kv"><span>Max drawdown</span><b id="dd">—</b></div>
+        <div class="kv"><span>Avg pnl / oz</span><b id="ret">—</b></div>
         <div class="kv"><span>Model params</span><b id="params">—</b></div>
       </div>
       <p class="muted" id="reasons" style="margin-top:14px"></p>
+      <h2 style="margin:18px 0 8px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Holdout priced signals</h2>
+      <table>
+        <thead>
+          <tr><th>When</th><th>Signal @ price</th><th>Actual</th><th>Result</th></tr>
+        </thead>
+        <tbody id="wf"><tr><td colspan="4" class="muted">Run backtest to fill…</td></tr></tbody>
+      </table>
     </section>
     <section class="card" style="grid-column:1/-1">
       <h2 style="margin:0 0 10px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Live signal log</h2>
@@ -160,7 +167,8 @@
       $("status").textContent = (data.symbol || "XAUUSD") + " · " + (data.timeframe || "15m");
       if (data.price != null) $("price").textContent = Number(data.price).toFixed(2);
       const b = $("badge");
-      b.textContent = data.signal || "HOLD";
+      const label = data.signal_with_price || ((data.signal || "HOLD") + (data.price != null ? (" @ " + Number(data.price).toFixed(2)) : ""));
+      b.textContent = label;
       b.className = "badge " + (data.signal || "HOLD");
       $("asof").textContent = (data.stale ? "Cached / stale · " : "As of ") + (data.as_of || data.logged_at || "");
       $("conf").textContent = pct(data.confidence);
@@ -200,15 +208,30 @@
       try {
         const m = await get("metrics");
         const bt = m.backtest || {};
+        const wf = m.walkforward || {};
         const tr = m.train || {};
-        if (tr.best_val_acc != null) $("vacc").textContent = pct(tr.best_val_acc);
-        if (bt.n_trades != null) $("ntr").textContent = bt.n_trades;
-        if (bt.win_rate != null) $("wr").textContent = pct(bt.win_rate);
-        if (bt.return_pct != null) $("ret").textContent = bt.return_pct.toFixed(1) + "%";
-        if (bt.max_drawdown_pct != null) $("dd").textContent = bt.max_drawdown_pct.toFixed(1) + "%";
+        const acc = wf.direction_accuracy != null ? wf.direction_accuracy : bt.direction_accuracy;
+        const wr = wf.trade_winrate != null ? wf.trade_winrate : bt.win_rate;
+        const ntr = wf.n_trades != null ? wf.n_trades : bt.n_trades;
+        const pnl = wf.avg_trade_pnl_usd_per_oz != null ? wf.avg_trade_pnl_usd_per_oz : bt.avg_trade_pnl;
+        if (wf.holdout_days) $("hdays").textContent = wf.holdout_days.join(", ");
+        else if (bt.holdout_days) $("hdays").textContent = (bt.holdout_days || []).join(", ");
+        if (acc != null) $("vacc").textContent = pct(acc);
+        if (ntr != null) $("ntr").textContent = ntr;
+        if (wr != null) $("wr").textContent = pct(wr);
+        if (pnl != null) $("ret").textContent = Number(pnl).toFixed(2);
         if (tr.n_params) $("params").textContent = Number(tr.n_params).toLocaleString();
-        if (m.latest_signal && $("badge").textContent === "HOLD" && !$("asof").textContent) {
+        if (m.latest_signal && (!$("asof").textContent)) {
           paintSignal(m.latest_signal);
+        }
+        const wfs = m.walkforward_signals || bt.sample_signals || [];
+        if (wfs.length) {
+          $("wf").innerHTML = wfs.slice(0, 12).map((r) => `<tr>
+            <td>${(r.time || "").replace("T", " ").slice(0, 16)}</td>
+            <td><b class="${r.signal}">${r.signal_with_price || (r.signal + " @ " + Number(r.price).toFixed(2))}</b></td>
+            <td>${r.actual || "—"}</td>
+            <td>${r.correct ? "OK" : (r.correct === false ? "MISS" : "—")}</td>
+          </tr>`).join("");
         }
       } catch {}
       try {
@@ -217,7 +240,7 @@
         if (!rows.length) return;
         $("log").innerHTML = rows.map((r) => `<tr>
           <td>${(r.logged_at || r.as_of || "").replace("T", " ").slice(0, 19)}</td>
-          <td><b class="${r.signal}">${r.signal}</b></td>
+          <td><b class="${r.signal}">${r.signal_with_price || (r.signal + " @ " + Number(r.price).toFixed(2))}</b></td>
           <td>${Number(r.price).toFixed(2)}</td>
           <td>${pct(r.confidence)}</td>
           <td>${pct(r.p_buy)} / ${pct(r.p_hold)} / ${pct(r.p_sell)}</td>
