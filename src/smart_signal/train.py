@@ -63,6 +63,13 @@ def _load_training_1m() -> pd.DataFrame | None:
     return None
 
 
+def _load_training_5m() -> pd.DataFrame | None:
+    pub_5 = data_dir() / "public" / "gc_5m.parquet"
+    if pub_5.exists():
+        return load_parquet(pub_5)
+    return None
+
+
 def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
     if source_15m is None:
         source_15m = _load_training_15m()
@@ -107,12 +114,16 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
                 df[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
             )
             frames[tf] = df
-    # Teach true intra-bar OHLC vs OLHC path on 15m using 1m prints when available.
-    bars_1m = _load_training_1m()
-    if bars_1m is not None and not bars_1m.empty and "15m" in frames:
-        from smart_signal.features.candle_structure import refine_path_olhc_from_1m
+    # Teach true intra-bar OHLC vs OLHC path: 5m covers long history, 1m overlays when present.
+    from smart_signal.features.candle_structure import refine_path_olhc_from_intrabar
 
-        frames["15m"] = refine_path_olhc_from_1m(frames["15m"], bars_1m)
+    if "15m" in frames:
+        bars_5m = _load_training_5m()
+        if bars_5m is not None and not bars_5m.empty:
+            frames["15m"] = refine_path_olhc_from_intrabar(frames["15m"], bars_5m)
+        bars_1m = _load_training_1m()
+        if bars_1m is not None and not bars_1m.empty:
+            frames["15m"] = refine_path_olhc_from_intrabar(frames["15m"], bars_1m)
         if "path_olhc" in frames["15m"].columns:
             frames["15m"]["path_olhc"] = (
                 frames["15m"]["path_olhc"].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)

@@ -111,16 +111,16 @@ def add_candle_structure(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def refine_path_olhc_from_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame) -> pd.DataFrame:
-    """Replace the wick proxy with true low-first vs high-first path from 1m ticks.
+def refine_path_olhc_from_intrabar(bars: pd.DataFrame, bars_child: pd.DataFrame) -> pd.DataFrame:
+    """Replace the wick proxy with true low-first vs high-first path from finer intrabar prints (5m/1m).
 
     For each parent bar, inspect the first time the parent high and low are
     tagged by 1m candles. If low prints before high → OLHC (+1); else OHLC (-1).
     """
     out = bars.copy().reset_index(drop=True)
-    if bars_1m is None or bars_1m.empty or "path_olhc" not in out.columns:
+    if bars_child is None or bars_child.empty or "path_olhc" not in out.columns:
         return out
-    child = bars_1m[["time", "high", "low"]].copy().sort_values("time").reset_index(drop=True)
+    child = bars_child[["time", "high", "low"]].copy().sort_values("time").reset_index(drop=True)
     parent = out[["time", "high", "low"]].copy()
     # Parent bar end ≈ next parent open; use asof ranges via searchsorted.
     pt = pd.to_datetime(parent["time"], utc=True).astype("int64").to_numpy()
@@ -158,3 +158,8 @@ def refine_path_olhc_from_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame) -> pd.Da
         path[i] = 1.0 if lo_i < hi_i else -1.0
     out["path_olhc"] = path.astype(np.float32)
     return out
+
+
+def refine_path_olhc_from_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame) -> pd.DataFrame:
+    """Backward-compatible alias for 1m intrabar path refinement."""
+    return refine_path_olhc_from_intrabar(bars, bars_1m)
