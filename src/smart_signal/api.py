@@ -115,14 +115,30 @@ def create_app() -> FastAPI:
         import json
 
         out: dict = {}
-        path = artifacts_dir() / "backtest.json"
-        train = artifacts_dir() / "train_metrics.json"
-        if path.exists():
-            out["backtest"] = json.loads(path.read_text(encoding="utf-8"))
-        if train.exists():
-            payload = json.loads(train.read_text(encoding="utf-8"))
-            payload.pop("history", None)
-            out["train"] = payload
+        for name in ("backtest.json", "walkforward.json", "train_metrics.json"):
+            path = artifacts_dir() / name
+            if not path.exists():
+                continue
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if name == "train_metrics.json":
+                history = payload.pop("history", None) or []
+                payload["history_tail"] = history[-8:] if isinstance(history, list) else []
+                out["train"] = payload
+            elif name == "walkforward.json":
+                summary = dict(payload.get("summary") or payload)
+                if summary.get("n_test_bars") is None and summary.get("n_bars") is not None:
+                    summary["n_test_bars"] = summary["n_bars"]
+                out["walkforward"] = summary
+                signals = payload.get("signals") or []
+                out["walkforward_signals"] = signals[:20]
+            else:
+                out["backtest"] = payload
+        if out.get("walkforward_signals") and out.get("backtest") is not None:
+            out["backtest"].setdefault("sample_signals", out["walkforward_signals"][:12])
+            out["backtest"].setdefault("by_day", (out.get("walkforward") or {}).get("by_day"))
+            out["backtest"].setdefault("holdout_days", (out.get("walkforward") or {}).get("holdout_days"))
+            out["backtest"].setdefault("win_rate", (out.get("walkforward") or {}).get("trade_winrate"))
+            out["backtest"].setdefault("direction_accuracy", (out.get("walkforward") or {}).get("direction_accuracy"))
         out["latest_signal"] = latest_signal()
         return out or {"detail": "no metrics yet"}
 

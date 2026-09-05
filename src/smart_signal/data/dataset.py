@@ -77,8 +77,9 @@ def fit_scaler(frames: dict[str, pd.DataFrame], indices: np.ndarray) -> FeatureS
 
 
 def _time_ns(frame: pd.DataFrame) -> np.ndarray:
+    # Force ns so int64 values are always epoch-nanoseconds (not us/ms).
     s = pd.to_datetime(frame["time"], utc=True)
-    return np.asarray(s.astype("int64").to_numpy(), dtype=np.int64)
+    return np.asarray(s.to_numpy(dtype="datetime64[ns]").astype(np.int64), dtype=np.int64)
 
 
 def valid_indices(frames: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> np.ndarray:
