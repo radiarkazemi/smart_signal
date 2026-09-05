@@ -18,6 +18,7 @@ from smart_signal.config import data_dir
 from smart_signal.features.indicators import FEATURE_COLUMNS
 from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.structure_prior import calibrate_candle_probs, calibrate_path
+from smart_signal.candle_blend import blend_candle_probs
 from smart_signal.models.goldnet import build_goldnet
 from smart_signal.policy import decide_direction
 
@@ -175,6 +176,7 @@ class SignalEngine:
             strength=struct_candle_s,
             min_abs_score=struct_min_abs,
         )
+        candle_probs = blend_candle_probs(candle_probs, row)
         candle_cls = int(np.argmax(candle_probs))
         y_up = float(out["y_up"].squeeze().cpu())
         y_dn = float(out["y_dn"].squeeze().cpu())

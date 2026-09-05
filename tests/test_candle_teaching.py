@@ -115,3 +115,22 @@ def test_consistency_loss_runs():
     assert "consistency" in parts
     assert "price" in parts
     assert "struct" in parts
+
+def test_blend_candle_probs_mixes_structure_prior():
+    import numpy as np
+    from smart_signal.candle_blend import blend_candle_probs, load_candle_blend
+
+    blend = load_candle_blend()
+    assert blend is not None
+    row = {c: 0.0 for c in blend["cols"]}
+    row["bull_bear"] = 1.0
+    row["ms_bias"] = 0.8
+    row["htf_trend_align"] = 0.7
+    row["premium_discount"] = -0.4
+    row["path_olhc"] = 1.0
+    base = np.array([0.34, 0.33, 0.33], dtype=np.float64)
+    out = blend_candle_probs(base, row, alpha=0.35, blend=blend)
+    assert out.shape == (3,)
+    assert abs(out.sum() - 1.0) < 1e-6
+    # With bullish structure, blend should not decrease bull vs bear share vs flat base.
+    assert out[2] - out[0] >= base[2] - base[0] - 1e-6

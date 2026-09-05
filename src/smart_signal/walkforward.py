@@ -21,6 +21,7 @@ from smart_signal.data.dataset import (
 )
 from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.structure_prior import calibrate_candle_probs, calibrate_path
+from smart_signal.candle_blend import blend_candle_probs
 from smart_signal.models.goldnet import build_goldnet, count_parameters
 from smart_signal.policy import apply_trade_cooldown, decide_direction
 from smart_signal.train import class_weights, prepare_frames, run_epoch, set_seed
@@ -286,6 +287,7 @@ def predict_holdout(
                 strength=struct_candle_s,
                 min_abs_score=struct_min_abs,
             )
+            cal_candle = blend_candle_probs(cal_candle, sig.iloc[src_i])
             candle_cls = int(np.argmax(cal_candle))
             true_candle = int(y_candle[i])
             cal_up, cal_dn, cal_loc = calibrate_path(
