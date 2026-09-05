@@ -74,6 +74,26 @@ def label_signal_frame(frames: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> 
         frames["15m"],
         flat_body_pct=float(label_cfg.get("flat_body_pct", 0.08)),
     )
+    # Soft ICT/MTF structure prior for next-candle teaching (1=neutral/flat).
+    sig = frames["15m"]
+    ms = sig["ms_bias"].to_numpy(dtype=np.float64) if "ms_bias" in sig.columns else np.zeros(len(sig))
+    htf = (
+        sig["htf_trend_align"].to_numpy(dtype=np.float64)
+        if "htf_trend_align" in sig.columns
+        else np.zeros(len(sig))
+    )
+    pd_loc = (
+        sig["premium_discount"].to_numpy(dtype=np.float64)
+        if "premium_discount" in sig.columns
+        else np.zeros(len(sig))
+    )
+    # Discount (low PD) + bullish structure → bullish prior; premium + bearish → bear.
+    score = 0.45 * ms + 0.35 * htf - 0.20 * pd_loc
+    thr = float(label_cfg.get("struct_prior_thr", 0.35))
+    y_struct = np.full(len(sig), 1, dtype=np.int64)
+    y_struct[score > thr] = 2
+    y_struct[score < -thr] = 0
+    frames["15m"] = sig.assign(y_struct=y_struct)
     return frames
 
 
@@ -185,6 +205,10 @@ class MTFGoldDataset(Dataset):
         self.y_up = sig["y_up"].to_numpy(dtype=np.float32)
         self.y_dn = sig["y_dn"].to_numpy(dtype=np.float32)
         self.y_close_loc = sig["y_close_loc"].to_numpy(dtype=np.float32)
+        if "y_struct" in sig.columns:
+            self.y_struct = sig["y_struct"].to_numpy(dtype=np.int64)
+        else:
+            self.y_struct = np.ones(len(sig), dtype=np.int64)
         self.close = sig["close"].to_numpy(dtype=np.float32)
         if "atr" in sig.columns:
             self.atr = sig["atr"].to_numpy(dtype=np.float32)
@@ -230,6 +254,7 @@ class MTFGoldDataset(Dataset):
             "y_up": torch.tensor(self.y_up[i], dtype=torch.float32),
             "y_dn": torch.tensor(self.y_dn[i], dtype=torch.float32),
             "y_close_loc": torch.tensor(self.y_close_loc[i], dtype=torch.float32),
+            "y_struct": torch.tensor(self.y_struct[i], dtype=torch.long),
             "atr": torch.tensor(self.atr[i], dtype=torch.float32),
             "close": torch.tensor(self.close[i], dtype=torch.float32),
             "time_ns": torch.tensor(t, dtype=torch.int64),

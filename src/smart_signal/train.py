@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from smart_signal.config import artifacts_dir, checkpoint_path, data_dir, load_config, models_dir
 from smart_signal.data.dataset import (
+    FeatureScaler,
     MTFGoldDataset,
     build_timeframes,
     collate_batch,
@@ -44,8 +45,6 @@ def _load_training_15m() -> pd.DataFrame:
 
         frames.append(resample_ohlcv(load_parquet(fx_1m), "15m"))
     if not frames and public_1h.exists():
-        from smart_signal.data.ohlcv import resample_ohlcv
-
         # last resort: treat 1h as coarse 15m source by resampling after upsample-free copy
         frames.append(load_parquet(public_1h).rename(columns={}))
     if not frames:
@@ -108,6 +107,16 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
                 df[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
             )
             frames[tf] = df
+    # Teach true intra-bar OHLC vs OLHC path on 15m using 1m prints when available.
+    bars_1m = _load_training_1m()
+    if bars_1m is not None and not bars_1m.empty and "15m" in frames:
+        from smart_signal.features.candle_structure import refine_path_olhc_from_1m
+
+        frames["15m"] = refine_path_olhc_from_1m(frames["15m"], bars_1m)
+        if "path_olhc" in frames["15m"].columns:
+            frames["15m"]["path_olhc"] = (
+                frames["15m"]["path_olhc"].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+            )
     return label_signal_frame(frames, cfg)
 
 
@@ -131,9 +140,25 @@ def run_epoch(
     train_cfg = cfg.get("train") or {}
     training = optimizer is not None
     model.train(training)
-    totals = {"loss": 0.0, "ce": 0.0, "ret": 0.0, "vol": 0.0, "candle": 0.0, "path": 0.0, "acc": 0.0, "n": 0.0}
+    totals = {
+        "loss": 0.0,
+        "ce": 0.0,
+        "ret": 0.0,
+        "vol": 0.0,
+        "candle": 0.0,
+        "path": 0.0,
+        "consistency": 0.0,
+        "price": 0.0,
+        "struct": 0.0,
+        "acc": 0.0,
+        "n": 0.0,
+    }
     correct = 0
     candle_correct = 0
+    bull_bear_correct = 0
+    bull_bear_seen = 0
+    close_mae_sum = 0.0
+    close_mae_n = 0
     seen = 0
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
@@ -149,7 +174,11 @@ def run_epoch(
             vol_w=float(train_cfg.get("vol_loss_w", 0.10)),
             candle_w=float(train_cfg.get("candle_loss_w", 0.30)),
             path_w=float(train_cfg.get("path_loss_w", 0.22)),
+            consistency_w=float(train_cfg.get("consistency_loss_w", 0.20)),
+            price_w=float(train_cfg.get("price_loss_w", 0.30)),
+            struct_w=float(train_cfg.get("struct_loss_w", 0.10)),
             label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+            dir_w=float(train_cfg.get("dir_loss_w", 1.0)),
         )
         if training:
             loss.backward()
@@ -158,10 +187,17 @@ def run_epoch(
             )
             optimizer.step()
         pred = outputs["dir_logits"].argmax(dim=-1)
+        candle_pred = outputs["candle_logits"].argmax(dim=-1)
         correct += int((pred == batch["y_dir"]).sum().item())
-        candle_correct += int((outputs["candle_logits"].argmax(dim=-1) == batch["y_candle"]).sum().item())
+        candle_correct += int((candle_pred == batch["y_candle"]).sum().item())
+        bb = batch["y_candle"] != 1
+        if int(bb.sum().item()) > 0:
+            bull_bear_correct += int((candle_pred[bb] == batch["y_candle"][bb]).sum().item())
+            bull_bear_seen += int(bb.sum().item())
+        close_mae_sum += float((outputs["y_close_loc"] - batch["y_close_loc"]).abs().sum().item())
+        close_mae_n += int(batch["y_close_loc"].numel())
         seen += int(batch["y_dir"].size(0))
-        for k in ("loss", "ce", "ret", "vol", "candle", "path"):
+        for k in ("loss", "ce", "ret", "vol", "candle", "path", "consistency", "price", "struct"):
             totals[k] += parts.get(k, 0.0) * batch["y_dir"].size(0)
         totals["n"] += batch["y_dir"].size(0)
     n = max(totals["n"], 1.0)
@@ -172,8 +208,13 @@ def run_epoch(
         "vol": totals["vol"] / n,
         "candle": totals["candle"] / n,
         "path": totals["path"] / n,
+        "consistency": totals["consistency"] / n,
+        "price": totals["price"] / n,
+        "struct": totals["struct"] / n,
         "acc": correct / max(seen, 1),
         "candle_acc": candle_correct / max(seen, 1),
+        "bull_bear_acc": bull_bear_correct / max(bull_bear_seen, 1),
+        "close_loc_mae": close_mae_sum / max(close_mae_n, 1),
     }
 
 
@@ -183,6 +224,8 @@ def train_model(
     source_15m: pd.DataFrame | None = None,
     epochs: int | None = None,
     checkpoint: Path | None = None,
+    init_checkpoint: Path | None = None,
+    freeze_backbone: bool | None = None,
 ) -> dict[str, Any]:
     cfg = cfg or load_config()
     train_cfg = cfg.get("train") or {}
@@ -201,7 +244,21 @@ def train_model(
         float(train_cfg.get("val_frac", 0.18)),
         int(train_cfg.get("embargo_bars", 8)),
     )
+    init_path = Path(init_checkpoint) if init_checkpoint else None
+    if init_path is None and train_cfg.get("init_checkpoint"):
+        init_path = Path(str(train_cfg["init_checkpoint"]))
+    do_freeze = (
+        bool(freeze_backbone)
+        if freeze_backbone is not None
+        else bool(train_cfg.get("freeze_backbone", False))
+    )
     scaler = fit_scaler(frames, train_idx)
+    if init_path is not None and init_path.exists() and bool(train_cfg.get("reuse_scaler", True)):
+        payload0 = torch.load(init_path, map_location="cpu", weights_only=False)
+        loaded = FeatureScaler.from_state(payload0.get("scaler"))
+        if loaded is not None and len(loaded.mean) == len(scaler.mean):
+            scaler = loaded
+            print(f"[train] reusing scaler from {init_path}", flush=True)
     train_ds = MTFGoldDataset(frames, cfg, train_idx, scaler=scaler)
     val_ds = MTFGoldDataset(frames, cfg, val_idx, scaler=scaler)
     y_train = frames["15m"]["y_dir"].to_numpy()[train_idx]
@@ -221,9 +278,32 @@ def train_model(
     train_loader = DataLoader(train_ds, sampler=sampler, **loader_kw)
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kw)
     model = build_goldnet(cfg).to(device)
+    if init_path is not None and init_path.exists():
+        payload = torch.load(init_path, map_location=device, weights_only=False)
+        missing, unexpected = model.load_state_dict(payload["model"], strict=False)
+        print(
+            f"[train] init from {init_path}  missing={len(missing)} unexpected={len(unexpected)}",
+            flush=True,
+        )
+    if do_freeze:
+        # Keep MTF encoders + fusion + regime; teach candle/path heads (+ light dir).
+        trainable_prefixes = (
+            "head_in.",
+            "dir_head.",
+            "ret_head.",
+            "vol_head.",
+            "candle_head.",
+            "up_head.",
+            "dn_head.",
+            "close_loc_head.",
+        )
+        for name, param in model.named_parameters():
+            param.requires_grad = name.startswith(trainable_prefixes)
+        n_tp = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"[train] freeze_backbone=True  trainable_params={n_tp}", flush=True)
     opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(train_cfg.get("lr", 2.8e-4)),
+        (p for p in model.parameters() if p.requires_grad),
+        lr=float(train_cfg.get("lr", train_cfg.get("learning_rate", 2.8e-4))),
         weight_decay=float(train_cfg.get("weight_decay", 4e-4)),
     )
     n_epochs = int(epochs if epochs is not None else train_cfg.get("epochs", 18))
@@ -242,15 +322,22 @@ def train_model(
     best_acc = -1.0
     stale = 0
     history = []
-    patience = int(train_cfg.get("patience", 5))
+    patience = int(train_cfg.get("early_stop_patience", train_cfg.get("patience", 5)))
     for epoch in range(1, n_epochs + 1):
         tr = run_epoch(model, train_loader, optimizer=opt, cfg=cfg, device=device, weights=weights)
         va = run_epoch(model, val_loader, optimizer=None, cfg=cfg, device=device, weights=weights)
         sched.step()
         row = {"epoch": epoch, "train": tr, "val": va, "lr": opt.param_groups[0]["lr"]}
         history.append(row)
-        candle_w = float(train_cfg.get("candle_ckpt_w", 0.15))
-        score = float(va["acc"] + candle_w * va.get("candle_acc", 0.0))
+        candle_w = float(train_cfg.get("candle_ckpt_w", 0.35))
+        bb_w = float(train_cfg.get("bull_bear_ckpt_w", 0.25))
+        loc_w = float(train_cfg.get("close_loc_ckpt_w", 0.12))
+        score = float(
+            va["acc"]
+            + candle_w * va.get("candle_acc", 0.0)
+            + bb_w * va.get("bull_bear_acc", 0.0)
+            - loc_w * va.get("close_loc_mae", 0.0)
+        )
         improved = score > (best_acc + 0.002)
         if improved:
             best_acc = score
@@ -270,9 +357,10 @@ def train_model(
             stale += 1
         print(
             f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f} "
-            f"candle={tr.get('candle_acc', 0):.3f}  "
+            f"candle={tr.get('candle_acc', 0):.3f} bb={tr.get('bull_bear_acc', 0):.3f}  "
             f"val_loss={va['loss']:.4f} acc={va['acc']:.3f} "
-            f"candle={va.get('candle_acc', 0):.3f}  best={best_acc:.3f}",
+            f"candle={va.get('candle_acc', 0):.3f} bb={va.get('bull_bear_acc', 0):.3f} "
+            f"loc_mae={va.get('close_loc_mae', 0):.3f}  best={best_acc:.3f}",
             flush=True,
         )
         if stale >= patience:

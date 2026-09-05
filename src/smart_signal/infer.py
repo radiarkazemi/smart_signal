@@ -17,6 +17,7 @@ from smart_signal.data.ohlcv import load_parquet, resample_ohlcv
 from smart_signal.config import data_dir
 from smart_signal.features.indicators import FEATURE_COLUMNS
 from smart_signal.labels.next_candle import decode_next_ohlc
+from smart_signal.structure_prior import calibrate_candle_probs, calibrate_path
 from smart_signal.models.goldnet import build_goldnet
 from smart_signal.policy import decide_direction
 
@@ -97,6 +98,18 @@ class SignalEngine:
                     )
                 )
             frames = attach_mtf_alignment(frames)
+        # Prefer true OLHC/OHLC path from 1m prints when available (teaches candle structure).
+        if "15m" in frames and df_1m is not None and not df_1m.empty:
+            from smart_signal.features.candle_structure import refine_path_olhc_from_1m
+
+            frames["15m"] = refine_path_olhc_from_1m(frames["15m"], df_1m)
+            if "path_olhc" in frames["15m"].columns:
+                frames["15m"]["path_olhc"] = (
+                    frames["15m"]["path_olhc"]
+                    .replace([float("inf"), float("-inf")], float("nan"))
+                    .fillna(0.0)
+                    .astype("float32")
+                )
         return frames
 
     def _load_htf_extra(self) -> dict[str, pd.DataFrame]:
@@ -128,6 +141,10 @@ class SignalEngine:
         atr = float(frames["15m"]["atr"].iloc[-1]) if "atr" in frames["15m"].columns else price * 0.002
         label_cfg = self.cfg.get("label") or {}
         row = frames["15m"].iloc[-1]
+        inf = self.cfg.get("inference") or {}
+        struct_candle_s = float(inf.get("structure_candle_strength", 0.0))
+        struct_path_s = float(inf.get("structure_path_strength", 0.18))
+        struct_min_abs = float(inf.get("structure_min_abs_score", 0.45))
         cls, conf, _diag = decide_direction(
             probs,
             cfg=self.cfg,
@@ -147,10 +164,31 @@ class SignalEngine:
             sl = price
         reasons = _explain(out, probs, signal)
         candle_probs = F.softmax(out["candle_logits"], dim=-1).squeeze(0).cpu().numpy()
+        ms = float(row.get("ms_bias", 0.0) or 0.0)
+        htf = float(row.get("htf_trend_align", 0.0) or 0.0)
+        pd_loc = float(row.get("premium_discount", 0.0) or 0.0)
+        candle_probs = calibrate_candle_probs(
+            candle_probs,
+            ms_bias=ms,
+            htf_trend_align=htf,
+            premium_discount=pd_loc,
+            strength=struct_candle_s,
+            min_abs_score=struct_min_abs,
+        )
         candle_cls = int(np.argmax(candle_probs))
         y_up = float(out["y_up"].squeeze().cpu())
         y_dn = float(out["y_dn"].squeeze().cpu())
         y_close_loc = float(out["y_close_loc"].squeeze().cpu())
+        y_up, y_dn, y_close_loc = calibrate_path(
+            y_up,
+            y_dn,
+            y_close_loc,
+            ms_bias=ms,
+            htf_trend_align=htf,
+            premium_discount=pd_loc,
+            strength=struct_path_s,
+            min_abs_score=struct_min_abs,
+        )
         pred_hi, pred_lo, pred_cl = decode_next_ohlc(price, atr, y_up, y_dn, y_close_loc)
         ohlc_ok = bool(pred_lo <= pred_cl <= pred_hi)
         range_width = max(pred_hi - pred_lo, 0.0)

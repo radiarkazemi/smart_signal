@@ -109,3 +109,52 @@ def add_candle_structure(df: pd.DataFrame) -> pd.DataFrame:
     out["wick_imbalance"] = wick_imbalance
     out["path_olhc"] = path_olhc
     return out
+
+
+def refine_path_olhc_from_1m(bars: pd.DataFrame, bars_1m: pd.DataFrame) -> pd.DataFrame:
+    """Replace the wick proxy with true low-first vs high-first path from 1m ticks.
+
+    For each parent bar, inspect the first time the parent high and low are
+    tagged by 1m candles. If low prints before high → OLHC (+1); else OHLC (-1).
+    """
+    out = bars.copy().reset_index(drop=True)
+    if bars_1m is None or bars_1m.empty or "path_olhc" not in out.columns:
+        return out
+    child = bars_1m[["time", "high", "low"]].copy().sort_values("time").reset_index(drop=True)
+    parent = out[["time", "high", "low"]].copy()
+    # Parent bar end ≈ next parent open; use asof ranges via searchsorted.
+    pt = pd.to_datetime(parent["time"], utc=True).astype("int64").to_numpy()
+    ct = pd.to_datetime(child["time"], utc=True).astype("int64").to_numpy()
+    ch = child["high"].to_numpy(dtype=np.float64)
+    cl = child["low"].to_numpy(dtype=np.float64)
+    ph = parent["high"].to_numpy(dtype=np.float64)
+    pl = parent["low"].to_numpy(dtype=np.float64)
+    path = out["path_olhc"].to_numpy(dtype=np.float64).copy()
+    # Assume fixed parent duration from median spacing.
+    if len(pt) > 2:
+        dur = int(np.median(np.diff(pt)))
+    else:
+        dur = 15 * 60 * 1_000_000_000
+    for i in range(len(parent)):
+        start = pt[i]
+        end = pt[i] + dur if i + 1 >= len(pt) else pt[i + 1]
+        left = int(np.searchsorted(ct, start, side="left"))
+        right = int(np.searchsorted(ct, end, side="left"))
+        if right - left < 2:
+            continue
+        hi_i = None
+        lo_i = None
+        target_h, target_l = ph[i], pl[i]
+        for j in range(left, right):
+            if hi_i is None and ch[j] >= target_h - 1e-9:
+                hi_i = j
+            if lo_i is None and cl[j] <= target_l + 1e-9:
+                lo_i = j
+            if hi_i is not None and lo_i is not None:
+                break
+        if hi_i is None or lo_i is None:
+            continue
+        # +1 = low first (OLHC / discount sweep first), -1 = high first
+        path[i] = 1.0 if lo_i < hi_i else -1.0
+    out["path_olhc"] = path.astype(np.float32)
+    return out
