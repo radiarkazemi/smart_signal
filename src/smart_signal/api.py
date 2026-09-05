@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from smart_signal.config import ROOT, artifacts_dir, checkpoint_path, env, load_config
 from smart_signal.data.forexcom import fetch_quote
@@ -37,14 +38,14 @@ def create_app() -> FastAPI:
         app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
     @app.get("/")
-    def dashboard():
+    async def dashboard():
         index = WEB_DIR / "index.html"
         if not index.exists():
             return JSONResponse({"service": "smart-signal", "docs": "/docs"})
         return FileResponse(index)
 
     @app.get("/health")
-    def health():
+    async def health():
         cfg = load_config()
         ckpt = checkpoint_path(cfg)
         loaded = False
@@ -68,16 +69,15 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/quote")
-    def quote():
+    async def quote():
         try:
-            data = fetch_quote()
+            data = await run_in_threadpool(fetch_quote)
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         data["server_time"] = datetime.now(timezone.utc).isoformat()
         return data
 
-    @app.get("/signal")
-    def signal():
+    def _compute_signal():
         now = time.time()
         cached = _signal_cache.get("payload")
         if cached and now - float(_signal_cache.get("ts") or 0) < CACHE_SEC:
@@ -102,12 +102,16 @@ def create_app() -> FastAPI:
         _signal_cache["payload"] = stored
         return stored
 
+    @app.get("/signal")
+    async def signal():
+        return await run_in_threadpool(_compute_signal)
+
     @app.get("/signals")
-    def signals(limit: int = 40):
+    async def signals(limit: int = 40):
         return {"count": min(limit, 200), "results": signal_history(limit=min(max(limit, 1), 200))}
 
     @app.get("/metrics")
-    def metrics():
+    async def metrics():
         import json
 
         out: dict = {}
@@ -123,14 +127,14 @@ def create_app() -> FastAPI:
         return out or {"detail": "no metrics yet"}
 
     @app.get("/status")
-    def status():
+    async def status():
         quote_data = None
         quote_error = None
         try:
-            quote_data = fetch_quote()
+            quote_data = await run_in_threadpool(fetch_quote)
         except Exception as exc:
             quote_error = str(exc)
-        health_body = health()
+        health_body = await health()
         return {
             **health_body,
             "quote": quote_data,
