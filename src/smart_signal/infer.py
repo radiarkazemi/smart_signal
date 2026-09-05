@@ -18,6 +18,7 @@ from smart_signal.config import data_dir
 from smart_signal.features.indicators import FEATURE_COLUMNS
 from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.models.goldnet import build_goldnet
+from smart_signal.policy import decide_direction
 
 LABELS = {0: "SELL", 1: "HOLD", 2: "BUY"}
 CANDLE_LABELS = {0: "BEARISH", 1: "FLAT", 2: "BULLISH"}
@@ -121,26 +122,26 @@ class SignalEngine:
         batch = {k: v.to(self.device) for k, v in batch.items()}
         out = self.model(batch, explain=True)
         probs = F.softmax(out["dir_logits"], dim=-1).squeeze(0).cpu().numpy()
-        inf = self.cfg.get("inference") or {}
-        hold_thr = float(inf.get("hold_threshold", 0.42))
-        min_conf = float(inf.get("min_confidence", 0.36))
-        label_cfg = self.cfg.get("label") or {}
-        cls = int(np.argmax(probs))
-        conf = float(probs[cls])
-        if probs[1] >= hold_thr or conf < min_conf:
-            cls = 1
-            conf = float(max(probs[1], conf if cls == 1 else 1.0 - conf))
-        price = float(frames["15m"]["close"].iloc[-1])
-        atr = float(frames["15m"]["atr"].iloc[-1]) if "atr" in frames["15m"].columns else price * 0.002
         exp_ret = float(out["y_ret"].squeeze().cpu())
         exp_vol = float(out["y_vol"].squeeze().cpu())
+        price = float(frames["15m"]["close"].iloc[-1])
+        atr = float(frames["15m"]["atr"].iloc[-1]) if "atr" in frames["15m"].columns else price * 0.002
+        label_cfg = self.cfg.get("label") or {}
+        row = frames["15m"].iloc[-1]
+        cls, conf, _diag = decide_direction(
+            probs,
+            cfg=self.cfg,
+            expected_log_return=exp_ret,
+            ms_bias=float(row.get("ms_bias", 0.0) or 0.0),
+            htf_trend_align=float(row.get("htf_trend_align", 0.0) or 0.0),
+        )
         signal = LABELS[cls]
         if signal == "BUY":
-            tp = price + float(label_cfg.get("tp_atr", 1.75)) * atr
-            sl = price - float(label_cfg.get("sl_atr", 1.15)) * atr
+            tp = price + float(label_cfg.get("tp_atr", 1.55)) * atr
+            sl = price - float(label_cfg.get("sl_atr", 1.55)) * atr
         elif signal == "SELL":
-            tp = price - float(label_cfg.get("tp_atr", 1.75)) * atr
-            sl = price + float(label_cfg.get("sl_atr", 1.15)) * atr
+            tp = price - float(label_cfg.get("tp_atr", 1.55)) * atr
+            sl = price + float(label_cfg.get("sl_atr", 1.55)) * atr
         else:
             tp = price
             sl = price

@@ -21,6 +21,7 @@ from smart_signal.data.dataset import (
 )
 from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.models.goldnet import build_goldnet, count_parameters
+from smart_signal.policy import apply_trade_cooldown, decide_direction
 from smart_signal.train import class_weights, prepare_frames, run_epoch, set_seed
 
 LABELS = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -129,7 +130,7 @@ def train_before_holdout(
         va = run_epoch(model, val_loader, optimizer=None, cfg=cfg, device=device, weights=weights)
         sched.step()
         history.append({"epoch": epoch, "train": tr, "val": va})
-        score = float(va["acc"] + 0.4 * va.get("candle_acc", 0.0))
+        score = float(va["acc"] + float((cfg.get("train") or {}).get("candle_ckpt_w", 0.15)) * va.get("candle_acc", 0.0))
         if score > best_acc + 0.002:
             best_acc = score
             stale = 0
@@ -182,16 +183,23 @@ def predict_holdout(
     model.eval()
 
     inf = cfg.get("inference") or {}
-    hold_thr = float(inf.get("hold_threshold", 0.42))
-    min_conf = float(inf.get("min_confidence", 0.34))
     label_cfg = cfg.get("label") or {}
     spread = float((cfg.get("backtest") or {}).get("spread_usd", inf.get("spread_usd", 0.35)))
-    horizon = int(label_cfg.get("horizon", 8))
+    horizon = int(label_cfg.get("horizon", 10))
+    cooldown = int(inf.get("trade_cooldown_bars", 6))
+    tp_atr = float(label_cfg.get("tp_atr", label_cfg.get("tp_atr", 1.55)))
+    sl_atr = float(label_cfg.get("sl_atr", label_cfg.get("sl_atr", 1.55)))
 
     ds = MTFGoldDataset(frames, cfg, test_indices, scaler=scaler)
     loader = DataLoader(ds, batch_size=64, shuffle=False, collate_fn=collate_batch)
     sig = frames["15m"]
     atr = sig["atr"].to_numpy(dtype=np.float64) if "atr" in sig.columns else np.zeros(len(sig))
+    ms_bias = sig["ms_bias"].to_numpy(dtype=np.float64) if "ms_bias" in sig.columns else np.zeros(len(sig))
+    htf_align = (
+        sig["htf_trend_align"].to_numpy(dtype=np.float64)
+        if "htf_trend_align" in sig.columns
+        else np.zeros(len(sig))
+    )
     times = pd.to_datetime(sig["time"], utc=True)
     time_ns = times.to_numpy(dtype="datetime64[ns]").astype(np.int64)
     # Map each dataset row back to its 15m bar index for correct day/ATR lookup.
@@ -215,16 +223,10 @@ def predict_holdout(
         pred_up = out["y_up"].cpu().numpy()
         pred_dn = out["y_dn"].cpu().numpy()
         pred_loc = out["y_close_loc"].cpu().numpy()
+        pred_ret = out["y_ret"].cpu().numpy()
         t_ns = batch["time_ns"].numpy()
         for i in range(len(y)):
             p = probs[i]
-            raw_cls = int(np.argmax(p))
-            conf = float(p[raw_cls])
-            if p[1] >= hold_thr or conf < min_conf:
-                cls = 1
-                conf = float(max(p[1], conf))
-            else:
-                cls = raw_cls
             price = float(close[i])
             # Prefer the original bar index from the holdout split order.
             src_i = int(test_indices[cursor + i]) if cursor + i < len(test_indices) else None
@@ -241,13 +243,20 @@ def predict_holdout(
             atr_v = float(atr_b[i]) if atr_b is not None else (
                 float(atr[src_i]) if atr[src_i] > 0 else price * 0.002
             )
+            cls, conf, diag = decide_direction(
+                p,
+                cfg=cfg,
+                expected_log_return=float(pred_ret[i]),
+                ms_bias=float(ms_bias[src_i]),
+                htf_trend_align=float(htf_align[src_i]),
+            )
             signal = LABELS[cls]
             if signal == "BUY":
-                tp = price + float(label_cfg.get("tp_atr", 1.75)) * atr_v
-                sl = price - float(label_cfg.get("sl_atr", 1.15)) * atr_v
+                tp = price + tp_atr * atr_v
+                sl = price - sl_atr * atr_v
             elif signal == "SELL":
-                tp = price - float(label_cfg.get("tp_atr", 1.75)) * atr_v
-                sl = price + float(label_cfg.get("sl_atr", 1.15)) * atr_v
+                tp = price - tp_atr * atr_v
+                sl = price + sl_atr * atr_v
             else:
                 tp = price
                 sl = price
@@ -277,6 +286,7 @@ def predict_holdout(
                     "p_sell": round(float(p[0]), 4),
                     "p_hold": round(float(p[1]), 4),
                     "p_buy": round(float(p[2]), 4),
+                    "edge": round(float(diag.get("edge", 0.0)), 4),
                     "take_profit": round(tp, 3),
                     "stop_loss": round(sl, 3),
                     "actual": actual,
@@ -299,6 +309,20 @@ def predict_holdout(
             )
         cursor += len(y)
     rows.sort(key=lambda r: r["time"])
+    rows = apply_trade_cooldown(rows, cooldown_bars=cooldown, signal_key="signal")
+    # Recompute trade outcomes after cooldown may have forced HOLD.
+    for r in rows:
+        if r["signal"] not in {"BUY", "SELL"}:
+            r["win"] = None
+            r["pnl_usd_per_oz"] = 0.0
+            r["signal_with_price"] = f"HOLD @ {float(r['price']):.2f}"
+        else:
+            direction = 1.0 if r["signal"] == "BUY" else -1.0
+            exit_px = float(r["price"]) * float(np.exp(r["forward_return"]))
+            pnl = direction * (exit_px - float(r["price"])) - spread
+            r["pnl_usd_per_oz"] = round(float(pnl), 3)
+            r["win"] = bool(pnl > 0)
+            r["signal_with_price"] = f"{r['signal']} @ {float(r['price']):.2f}"
     return rows
 
 

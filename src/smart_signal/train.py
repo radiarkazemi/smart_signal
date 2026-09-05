@@ -144,11 +144,12 @@ def run_epoch(
             outputs,
             batch,
             class_weight=weights,
-            gamma=float(train_cfg.get("focal_gamma", 1.6)),
-            return_w=float(train_cfg.get("return_loss_w", 0.32)),
-            vol_w=float(train_cfg.get("vol_loss_w", 0.12)),
-            candle_w=float(train_cfg.get("candle_loss_w", 0.45)),
-            path_w=float(train_cfg.get("path_loss_w", 0.25)),
+            gamma=float(train_cfg.get("focal_gamma", 2.0)),
+            return_w=float(train_cfg.get("return_loss_w", 0.35)),
+            vol_w=float(train_cfg.get("vol_loss_w", 0.10)),
+            candle_w=float(train_cfg.get("candle_loss_w", 0.30)),
+            path_w=float(train_cfg.get("path_loss_w", 0.22)),
+            label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         )
         if training:
             loss.backward()
@@ -248,11 +249,11 @@ def train_model(
         sched.step()
         row = {"epoch": epoch, "train": tr, "val": va, "lr": opt.param_groups[0]["lr"]}
         history.append(row)
-        improved = (va["acc"] + 0.4 * va.get("candle_acc", 0.0)) > (
-            best_acc + 0.002
-        )
+        candle_w = float(train_cfg.get("candle_ckpt_w", 0.15))
+        score = float(va["acc"] + candle_w * va.get("candle_acc", 0.0))
+        improved = score > (best_acc + 0.002)
         if improved:
-            best_acc = float(va["acc"] + 0.4 * va.get("candle_acc", 0.0))
+            best_acc = score
             stale = 0
             payload = {
                 "model": model.state_dict(),

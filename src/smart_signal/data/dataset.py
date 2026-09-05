@@ -66,9 +66,9 @@ def label_signal_frame(frames: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> 
     frames["15m"] = triple_barrier_labels(
         frames["15m"],
         horizon=int(label_cfg.get("horizon", 8)),
-        tp_atr=float(label_cfg.get("tp_atr", 1.75)),
-        sl_atr=float(label_cfg.get("sl_atr", 1.15)),
-        min_atr_pct=float(label_cfg.get("min_atr_pct", 0.0004)),
+        tp_atr=float(label_cfg.get("tp_atr", label_cfg.get("tp_atr", 1.55))),
+        sl_atr=float(label_cfg.get("sl_atr", label_cfg.get("sl_atr", 1.55))),
+        min_atr_pct=float(label_cfg.get("min_atr_pct", label_cfg.get("min_atr_pct", 0.00045))),
     )
     frames["15m"] = next_candle_labels(
         frames["15m"],

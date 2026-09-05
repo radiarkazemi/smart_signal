@@ -82,33 +82,44 @@ model:
 
 label:
   atr_period: 14
-  tp_atr: 1.75
-  sl_atr: 1.15
-  horizon: 8
-  min_atr_pct: 0.0004
+  # Symmetric barriers → less sell-label bias, cleaner triple-barrier targets.
+  tp_atr: 1.55
+  sl_atr: 1.55
+  horizon: 10
+  min_atr_pct: 0.00045
   flat_body_pct: 0.08
 
 train:
   batch_size: 48
-  epochs: 28
-  lr: 0.00028
-  weight_decay: 0.0004
+  epochs: 32
+  lr: 0.00026
+  weight_decay: 0.0005
   warmup_frac: 0.08
   grad_clip: 1.0
   val_frac: 0.18
-  embargo_bars: 8
+  embargo_bars: 10
   num_workers: 0
   seed: 42
-  focal_gamma: 1.6
-  return_loss_w: 0.22
-  candle_loss_w: 0.65
-  path_loss_w: 0.45
+  focal_gamma: 2.0
+  label_smoothing: 0.04
+  # Direction is the trade signal — keep candle/path as auxiliaries, not dominant.
+  return_loss_w: 0.35
+  candle_loss_w: 0.30
+  path_loss_w: 0.22
   vol_loss_w: 0.10
-  patience: 10
+  patience: 12
+  # Checkpoint score: favor direction accuracy over candle auxiliary.
+  candle_ckpt_w: 0.15
 
 inference:
-  hold_threshold: 0.42
-  min_confidence: 0.34
+  # Meta-label style gate: trade less, win more.
+  hold_threshold: 0.36
+  min_confidence: 0.48
+  min_edge: 0.15
+  require_return_align: true
+  require_structure_align: false
+  structure_min: 0.15
+  trade_cooldown_bars: 6
   spread_usd: 0.35
 
 backtest:
