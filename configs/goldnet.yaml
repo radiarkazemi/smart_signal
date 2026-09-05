@@ -8,7 +8,7 @@ timeframes:
   4h:
     lookback: 42
   1d:
-    lookback: 48
+    lookback: 32
 
 features:
   - log_ret
@@ -33,6 +33,42 @@ features:
   - hour_cos
   - dow_sin
   - dow_cos
+  - close_loc
+  - open_loc
+  - gap_pct
+  - bull_bear
+  - consec_dir
+  - engulf
+  - inside_bar
+  - outside_bar
+  - doji
+  - pin_up
+  - pin_down
+  - marubozu
+  - wick_imbalance
+  - path_olhc
+  - ms_bias
+  - bos
+  - choch
+  - fvg_up
+  - fvg_down
+  - fvg_mid_dist
+  - ob_bull_dist
+  - ob_bear_dist
+  - liq_sweep_hi
+  - liq_sweep_lo
+  - eq_highs
+  - eq_lows
+  - premium_discount
+  - disp_up
+  - disp_down
+  - htf_open_dist
+  - htf_mid_dist
+  - htf_range_loc
+  - htf_trend_align
+  - htf_same_dir
+  - parent_body
+  - nested_pos
 
 model:
   d_model: 64
@@ -50,10 +86,11 @@ label:
   sl_atr: 1.15
   horizon: 8
   min_atr_pct: 0.0004
+  flat_body_pct: 0.08
 
 train:
   batch_size: 48
-  epochs: 18
+  epochs: 28
   lr: 0.00028
   weight_decay: 0.0004
   warmup_frac: 0.08
@@ -63,9 +100,11 @@ train:
   num_workers: 0
   seed: 42
   focal_gamma: 1.6
-  return_loss_w: 0.32
-  vol_loss_w: 0.12
-  patience: 6
+  return_loss_w: 0.22
+  candle_loss_w: 0.65
+  path_loss_w: 0.45
+  vol_loss_w: 0.10
+  patience: 10
 
 inference:
   hold_threshold: 0.42
