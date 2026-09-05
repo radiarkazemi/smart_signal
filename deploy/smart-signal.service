@@ -1,0 +1,18 @@
+[Unit]
+Description=Smart Signal live GoldNet dashboard
+After=network.target docker.service nginx.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/smart_signal
+EnvironmentFile=/opt/smart_signal/deploy/smart-signal.env
+ExecStart=/opt/smart_signal/.venv/bin/uvicorn smart_signal.api:app --host 127.0.0.1 --port 8091 --workers 1
+Restart=always
+RestartSec=5
+MemoryMax=900M
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

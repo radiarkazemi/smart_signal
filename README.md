@@ -45,7 +45,12 @@ python -m smart_signal signal
 python -m smart_signal serve --port 8080
 ```
 
-Open `http://127.0.0.1:8080/` for the dashboard. `GET /signal` returns the live decision:
+Live dashboard on the gold VPS:
+
+- http://185.222.163.116/smart-signal/
+- https://goldanil.ir/smart-signal/
+
+Locally, `python -m smart_signal serve --port 8080` then open `http://127.0.0.1:8080/`. `GET /signal` returns the live decision:
 
 ```json
 {

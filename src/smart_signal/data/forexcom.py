@@ -24,10 +24,15 @@ def bars_url() -> str:
     return env("SMART_SIGNAL_BARS_URL") or DEFAULT_BARS_URL
 
 
+def _headers() -> dict[str, str]:
+    key = env("SMART_SIGNAL_API_KEY")
+    return {"X-API-Key": key} if key else {}
+
+
 def fetch_last_price(symbol: str = "xauusd", timeframe: str = "1m") -> dict[str, Any]:
     url = f"{api_base()}/prices/{symbol}/?timeframe={timeframe}"
     with httpx.Client(timeout=TIMEOUT) as client:
-        resp = client.get(url)
+        resp = client.get(url, headers=_headers())
         resp.raise_for_status()
         return resp.json()
 
@@ -42,7 +47,7 @@ def fetch_history_page(
     if before:
         url += f"&before={quote(before)}"
     with httpx.Client(timeout=TIMEOUT) as client:
-        resp = client.get(url)
+        resp = client.get(url, headers=_headers())
         resp.raise_for_status()
         payload = resp.json()
     return payload.get("results") or []
@@ -100,6 +105,66 @@ def fetch_live_1m_bars(limit: int = 2000) -> pd.DataFrame:
             }
         )
     return bars_from_records(rows)
+
+
+def fetch_mongo_1m(limit: int = 4000) -> pd.DataFrame:
+    uri = env("SMART_SIGNAL_MONGO_URI")
+    if not uri:
+        return pd.DataFrame()
+    try:
+        from pymongo import MongoClient
+    except ImportError:
+        return pd.DataFrame()
+    client = MongoClient(uri, serverSelectionTimeoutMS=4000)
+    docs = (
+        client["historical_data"]["xauusd_1m"]
+        .find({}, {"data": 1})
+        .sort("_id", -1)
+        .limit(limit)
+    )
+    rows = []
+    for doc in docs:
+        data = doc.get("data") or {}
+        if data.get("close") is None:
+            continue
+        rows.append(
+            {
+                "time": data.get("time"),
+                "open": data.get("open"),
+                "high": data.get("high"),
+                "low": data.get("low"),
+                "close": data.get("close"),
+                "volume": data.get("volume") or 0.0,
+            }
+        )
+    return bars_from_records(rows)
+
+
+def fetch_quote() -> dict[str, Any]:
+    try:
+        quote = fetch_last_price("xauusd", "1m")
+        if quote.get("price") is not None:
+            return quote
+    except Exception:
+        pass
+    bars = fetch_live_1m_bars(limit=80)
+    if bars.empty:
+        mongo = fetch_mongo_1m(limit=5)
+        if mongo.empty:
+            raise RuntimeError("No live XAUUSD quote from API, bars, or Mongo")
+        bars = mongo
+    last = bars.iloc[-1]
+    return {
+        "symbol": "xauusd",
+        "exchange": "forexcom",
+        "timeframe": "1m",
+        "price": float(last["close"]),
+        "open": float(last["open"]),
+        "high": float(last["high"]),
+        "low": float(last["low"]),
+        "volume": float(last.get("volume") or 0.0),
+        "time": pd.Timestamp(last["time"]).isoformat(),
+    }
 
 
 def load_cached_jsonl(timeframe: str) -> pd.DataFrame:

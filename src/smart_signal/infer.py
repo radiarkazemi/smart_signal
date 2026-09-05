@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from smart_signal.config import checkpoint_path, load_config
 from smart_signal.data.dataset import FeatureScaler, build_timeframes, last_windows
-from smart_signal.data.forexcom import fetch_history, fetch_last_price, fetch_live_1m_bars
+from smart_signal.data.forexcom import fetch_history, fetch_live_1m_bars, fetch_mongo_1m
 from smart_signal.data.ohlcv import load_parquet, resample_ohlcv
 from smart_signal.config import data_dir
 from smart_signal.features.indicators import FEATURE_COLUMNS
@@ -52,6 +52,7 @@ class SignalEngine:
         self.loaded = False
         self.ckpt_path = path
         self.scaler = None
+        self._htf_extra: dict[str, pd.DataFrame] | None = None
         if path.exists():
             payload = torch.load(path, map_location=self.device, weights_only=False)
             self.model.load_state_dict(payload["model"])
@@ -59,19 +60,30 @@ class SignalEngine:
             self.loaded = True
 
     def _frames_from_1m(self, df_1m: pd.DataFrame) -> dict[str, pd.DataFrame]:
+        frames = build_timeframes(base_1m=df_1m)
+        extras = self._load_htf_extra()
+        if "1h" in extras:
+            frames["1h"] = _merge_tf(frames["1h"], extras["1h"])
+        if "4h" in extras:
+            frames["4h"] = _merge_tf(frames["4h"], extras["4h"])
+        if "1d" in extras:
+            frames["1d"] = _merge_tf(frames["1d"], extras["1d"])
+        return frames
+
+    def _load_htf_extra(self) -> dict[str, pd.DataFrame]:
+        if self._htf_extra is not None:
+            return self._htf_extra
+        extras: dict[str, pd.DataFrame] = {}
         cached_1h = data_dir() / "public" / "gc_1h.parquet"
         cached_1d = data_dir() / "public" / "gc_1d.parquet"
-        frames = build_timeframes(base_1m=df_1m)
-        # extend HTF lookback with public gold history when FOREXCOM history is short
         if cached_1h.exists():
             extra = load_parquet(cached_1h)
-            extra_4h = resample_ohlcv(extra, "4h")
-            frames["1h"] = _merge_tf(frames["1h"], extra)
-            frames["4h"] = _merge_tf(frames["4h"], extra_4h)
+            extras["1h"] = extra
+            extras["4h"] = resample_ohlcv(extra, "4h")
         if cached_1d.exists():
-            extra_d = load_parquet(cached_1d)
-            frames["1d"] = _merge_tf(frames["1d"], extra_d)
-        return frames
+            extras["1d"] = load_parquet(cached_1d)
+        self._htf_extra = extras
+        return extras
 
     @torch.no_grad()
     def predict_frames(self, frames: dict[str, pd.DataFrame]) -> Signal:
@@ -152,9 +164,14 @@ def _load_live_1m() -> pd.DataFrame:
     cached = data_dir() / "forexcom" / "xauusd_1m.parquet"
     live = pd.DataFrame()
     try:
-        live = fetch_live_1m_bars(limit=2000)
+        live = fetch_mongo_1m(limit=4000)
     except Exception:
         live = pd.DataFrame()
+    if live.empty:
+        try:
+            live = fetch_live_1m_bars(limit=2000)
+        except Exception:
+            live = pd.DataFrame()
     if cached.exists():
         hist = load_parquet(cached)
         if live.empty:
