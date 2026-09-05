@@ -1,0 +1,78 @@
+symbol: XAUUSD
+signal_timeframe: 15m
+timeframes:
+  15m:
+    lookback: 96
+  1h:
+    lookback: 72
+  4h:
+    lookback: 42
+  1d:
+    lookback: 48
+
+features:
+  - log_ret
+  - rng_pct
+  - body_pct
+  - upper_wick
+  - lower_wick
+  - rsi_14
+  - rsi_28
+  - macd
+  - macd_sig
+  - macd_hist
+  - bb_pct
+  - bb_width
+  - atr_pct
+  - stoch_k
+  - stoch_d
+  - ema_gap_fast
+  - ema_gap_slow
+  - rv_20
+  - hour_sin
+  - hour_cos
+  - dow_sin
+  - dow_cos
+
+model:
+  d_model: 64
+  d_hidden: 128
+  n_heads: 4
+  n_tcn_layers: 4
+  tcn_kernel: 3
+  n_transformer_layers: 2
+  dropout: 0.12
+  gru_layers: 1
+
+label:
+  atr_period: 14
+  tp_atr: 1.75
+  sl_atr: 1.15
+  horizon: 8
+  min_atr_pct: 0.0004
+
+train:
+  batch_size: 48
+  epochs: 18
+  lr: 0.00028
+  weight_decay: 0.0004
+  warmup_frac: 0.08
+  grad_clip: 1.0
+  val_frac: 0.18
+  embargo_bars: 8
+  num_workers: 0
+  seed: 42
+  focal_gamma: 1.6
+  return_loss_w: 0.32
+  vol_loss_w: 0.12
+  patience: 6
+
+inference:
+  hold_threshold: 0.42
+  min_confidence: 0.34
+  spread_usd: 0.35
+
+backtest:
+  start_usd: 10000
+  risk_frac: 0.004
+  spread_usd: 0.35
