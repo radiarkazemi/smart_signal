@@ -24,7 +24,7 @@
         radial-gradient(800px 420px at 100% 0%, #14201c 0%, transparent 42%),
         var(--bg);
       color: var(--gold2);
-      font-family: ui-sans-serif, system-ui, Segoe UI, sans-serif;
+      font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
     }
     header {
       display: flex;
@@ -57,10 +57,10 @@
     }
     main {
       display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
+      grid-template-columns: 1.1fr 0.9fr;
       gap: 16px;
       padding: 18px;
-      max-width: 1280px;
+      max-width: 1320px;
     }
     .card {
       background: linear-gradient(180deg, #16141c 0%, #0e1014 100%);
@@ -68,23 +68,32 @@
       border-radius: 16px;
       padding: 18px;
     }
+    .span2 { grid-column: 1 / -1; }
+    h2 {
+      margin: 0 0 10px;
+      color: var(--gold);
+      font-size: 13px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    h2.sub { margin-top: 18px; }
     .price { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 44px; margin: 8px 0; }
     .badge {
       display: inline-block;
       padding: 10px 16px;
       border-radius: 999px;
       font-weight: 700;
-      letter-spacing: 0.16em;
-      font-size: 20px;
+      letter-spacing: 0.12em;
+      font-size: 18px;
     }
     .BUY { background: rgba(61,214,140,0.15); color: var(--buy); border: 1px solid var(--buy); }
     .SELL { background: rgba(239,107,107,0.15); color: var(--sell); border: 1px solid var(--sell); }
     .HOLD { background: rgba(200,194,180,0.1); color: var(--hold); border: 1px solid var(--hold); }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
-    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
     .kv { background: #0b0d11; border-radius: 10px; padding: 12px; }
     .kv span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
-    .kv b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 16px; }
+    .kv b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; }
     .bar { height: 8px; background: #222; border-radius: 99px; overflow: hidden; display: flex; margin: 10px 0 16px; }
     .bar i { display: block; height: 100%; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -92,7 +101,10 @@
     th { color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; }
     .err { color: var(--sell); white-space: pre-wrap; }
     .muted { color: var(--muted); }
-    @media (max-width: 900px) {
+    .ok { color: var(--buy); }
+    .miss { color: var(--sell); }
+    .note { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    @media (max-width: 980px) {
       main { grid-template-columns: 1fr; padding: 12px; }
       header { flex-direction: column; align-items: flex-start; }
       .price { font-size: 32px; }
@@ -104,7 +116,7 @@
   <header>
     <div>
       <h1>Smart Signal Live</h1>
-      <p>GoldNet on your FOREXCOM XAUUSD feed · 15m / 1h / 4h / 1d</p>
+      <p>GoldNet · FOREXCOM XAUUSD · walk-forward backtest + live priced signals</p>
     </div>
     <div class="actions">
       <div class="muted"><span class="dot" id="dot"></span><span id="feed">connecting…</span></div>
@@ -113,6 +125,7 @@
   </header>
   <main>
     <section class="card">
+      <h2>Live signal</h2>
       <div id="status">Loading live gold…</div>
       <div class="price" id="price">—</div>
       <div><span class="badge HOLD" id="badge">HOLD</span></div>
@@ -124,31 +137,70 @@
         <div class="kv"><span>Take profit</span><b id="tp">—</b></div>
         <div class="kv"><span>Stop loss</span><b id="sl">—</b></div>
       </div>
+      <p class="muted" id="reasons" style="margin-top:14px"></p>
     </section>
+
     <section class="card">
-      <h2 style="margin:0 0 8px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Results</h2>
-      <div class="grid3" id="results">
+      <h2>Walk-forward backtest</h2>
+      <p class="note" id="wfNote">Train on history, hold out the last trading days, score next candles.</p>
+      <div class="grid3">
         <div class="kv"><span>Holdout days</span><b id="hdays">—</b></div>
         <div class="kv"><span>Direction accuracy</span><b id="vacc">—</b></div>
         <div class="kv"><span>Trade win rate</span><b id="wr">—</b></div>
         <div class="kv"><span>Holdout trades</span><b id="ntr">—</b></div>
         <div class="kv"><span>Avg pnl / oz</span><b id="ret">—</b></div>
-        <div class="kv"><span>Model params</span><b id="params">—</b></div>
+        <div class="kv"><span>Test bars</span><b id="tbars">—</b></div>
       </div>
-      <p class="muted" id="reasons" style="margin-top:14px"></p>
-      <h2 style="margin:18px 0 8px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Holdout priced signals</h2>
+      <div class="grid3">
+        <div class="kv"><span>BUY signals</span><b id="nbuy">—</b></div>
+        <div class="kv"><span>SELL signals</span><b id="nsell">—</b></div>
+        <div class="kv"><span>HOLD signals</span><b id="nhold">—</b></div>
+      </div>
+      <h2 class="sub">Per-day holdout</h2>
       <table>
         <thead>
-          <tr><th>When</th><th>Signal @ price</th><th>Actual</th><th>Result</th></tr>
+          <tr><th>Day</th><th>Bars</th><th>Dir acc</th><th>Trades</th><th>Win rate</th><th>Avg pnl</th></tr>
         </thead>
-        <tbody id="wf"><tr><td colspan="4" class="muted">Run backtest to fill…</td></tr></tbody>
+        <tbody id="byday"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
       </table>
     </section>
-    <section class="card" style="grid-column:1/-1">
-      <h2 style="margin:0 0 10px;color:var(--gold);font-size:14px;letter-spacing:0.08em;text-transform:uppercase">Live signal log</h2>
+
+    <section class="card">
+      <h2>Training</h2>
+      <div class="grid3">
+        <div class="kv"><span>Model params</span><b id="params">—</b></div>
+        <div class="kv"><span>Train val accuracy</span><b id="tacc">—</b></div>
+        <div class="kv"><span>Walk-forward val acc</span><b id="wfacc">—</b></div>
+        <div class="kv"><span>Train bars</span><b id="ntrain">—</b></div>
+        <div class="kv"><span>Val bars</span><b id="nval">—</b></div>
+        <div class="kv"><span>WF train bars</span><b id="wftrain">—</b></div>
+      </div>
+      <h2 class="sub">Recent training epochs</h2>
       <table>
         <thead>
-          <tr><th>When</th><th>Signal</th><th>Price</th><th>Conf</th><th>Buy / Hold / Sell</th></tr>
+          <tr><th>Epoch</th><th>Train acc</th><th>Val acc</th><th>Val loss</th></tr>
+        </thead>
+        <tbody id="epochs"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+      </table>
+      <p class="note" id="labelCounts"></p>
+    </section>
+
+    <section class="card">
+      <h2>Holdout priced signals</h2>
+      <p class="note">Predicted signal @ entry price vs actual triple-barrier label on holdout days.</p>
+      <table>
+        <thead>
+          <tr><th>When</th><th>Signal @ price</th><th>Actual</th><th>Conf</th><th>PnL</th><th>Result</th></tr>
+        </thead>
+        <tbody id="wf"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="card span2">
+      <h2>Live signal log</h2>
+      <table>
+        <thead>
+          <tr><th>When</th><th>Signal @ price</th><th>Price</th><th>Conf</th><th>Buy / Hold / Sell</th></tr>
         </thead>
         <tbody id="log"><tr><td colspan="5" class="muted">Waiting for first inference…</td></tr></tbody>
       </table>
@@ -156,18 +208,22 @@
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
-    const pct = (x) => ((Number(x) || 0) * 100).toFixed(1) + "%";
-    async function get(path) {
+    const pct = (x) => (x == null || x === "" ? "—" : ((Number(x) || 0) * 100).toFixed(1) + "%");
+    const num = (x, d = 2) => (x == null || Number.isNaN(Number(x)) ? "—" : Number(x).toFixed(d));
+
+    async function api(path) {
       const res = await fetch(path, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
       return data;
     }
+
     function paintSignal(data) {
       $("status").textContent = (data.symbol || "XAUUSD") + " · " + (data.timeframe || "15m");
       if (data.price != null) $("price").textContent = Number(data.price).toFixed(2);
       const b = $("badge");
-      const label = data.signal_with_price || ((data.signal || "HOLD") + (data.price != null ? (" @ " + Number(data.price).toFixed(2)) : ""));
+      const label = data.signal_with_price
+        || ((data.signal || "HOLD") + (data.price != null ? (" @ " + Number(data.price).toFixed(2)) : ""));
       b.textContent = label;
       b.className = "badge " + (data.signal || "HOLD");
       $("asof").textContent = (data.stale ? "Cached / stale · " : "As of ") + (data.as_of || data.logged_at || "");
@@ -177,15 +233,16 @@
       $("tp").textContent = Number(data.take_profit || data.price || 0).toFixed(2);
       $("sl").textContent = Number(data.stop_loss || data.price || 0).toFixed(2);
       $("mix").innerHTML =
-        `<i style="width:${(data.p_sell||0)*100}%;background:#ef6b6b"></i>` +
-        `<i style="width:${(data.p_hold||0)*100}%;background:#8b8680"></i>` +
-        `<i style="width:${(data.p_buy||0)*100}%;background:#3dd68c"></i>`;
+        `<i style="width:${(data.p_sell || 0) * 100}%;background:#ef6b6b"></i>` +
+        `<i style="width:${(data.p_hold || 0) * 100}%;background:#8b8680"></i>` +
+        `<i style="width:${(data.p_buy || 0) * 100}%;background:#3dd68c"></i>`;
       $("reasons").textContent = (data.reasons || []).join(" · ");
       if (data.model_params) $("params").textContent = Number(data.model_params).toLocaleString();
     }
+
     async function loadQuote() {
       try {
-        const q = await get("quote");
+        const q = await api("quote");
         $("dot").className = "dot ok";
         $("feed").textContent = "FOREXCOM live · " + Number(q.price).toFixed(2);
         if (!$("price").textContent || $("price").textContent === "—") {
@@ -196,61 +253,137 @@
         $("feed").textContent = "feed error";
       }
     }
+
     async function loadSignal() {
       try {
-        const data = await get("signal");
-        paintSignal(data);
+        paintSignal(await api("signal"));
       } catch (e) {
         $("status").innerHTML = `<span class="err">${e.message}</span>`;
       }
     }
+
+    function paintWalkforward(m) {
+      const bt = m.backtest || {};
+      const wf = m.walkforward || {};
+      const days = wf.holdout_days || bt.holdout_days || [];
+      const acc = wf.direction_accuracy != null ? wf.direction_accuracy : bt.direction_accuracy;
+      const wr = wf.trade_winrate != null ? wf.trade_winrate : bt.win_rate;
+      const ntr = wf.n_trades != null ? wf.n_trades : bt.n_trades;
+      const pnl = wf.avg_trade_pnl_usd_per_oz != null ? wf.avg_trade_pnl_usd_per_oz : bt.avg_trade_pnl;
+      const bars = wf.n_bars != null ? wf.n_bars : (wf.n_test_bars != null ? wf.n_test_bars : bt.n_windows);
+
+      if (days.length) $("hdays").textContent = days.join(", ");
+      if (acc != null) $("vacc").textContent = pct(acc);
+      if (wr != null) $("wr").textContent = pct(wr);
+      if (ntr != null) $("ntr").textContent = ntr;
+      if (pnl != null) $("ret").textContent = num(pnl, 2);
+      if (bars != null) $("tbars").textContent = bars;
+      if (wf.buy_signals != null) $("nbuy").textContent = wf.buy_signals;
+      if (wf.sell_signals != null) $("nsell").textContent = wf.sell_signals;
+      if (wf.hold_signals != null) $("nhold").textContent = wf.hold_signals;
+      if (wf.train_val_acc != null) $("wfacc").textContent = pct(wf.train_val_acc);
+      if (wf.n_train_bars != null) $("wftrain").textContent = Number(wf.n_train_bars).toLocaleString();
+      if (days.length) {
+        $("wfNote").textContent =
+          "Trained on prior bars, held out " + days.join(" + ") +
+          ", then scored next-day 15m candles with priced BUY/SELL/HOLD signals.";
+      }
+
+      const byDay = wf.by_day || bt.by_day || {};
+      const dayKeys = Object.keys(byDay).sort();
+      $("byday").innerHTML = dayKeys.length
+        ? dayKeys.map((day) => {
+            const d = byDay[day] || {};
+            return `<tr>
+              <td>${day}</td>
+              <td>${d.bars ?? "—"}</td>
+              <td>${pct(d.direction_accuracy)}</td>
+              <td>${d.trades ?? "—"}</td>
+              <td>${pct(d.trade_winrate)}</td>
+              <td>${num(d.avg_pnl_usd_per_oz, 2)}</td>
+            </tr>`;
+          }).join("")
+        : `<tr><td colspan="6" class="muted">No per-day stats yet</td></tr>`;
+
+      const rows = m.walkforward_signals || bt.sample_signals || [];
+      if (rows.length) {
+        $("wf").innerHTML = rows.slice(0, 16).map((r) => {
+          const ok = r.correct === true;
+          const miss = r.correct === false;
+          const result = ok ? "OK" : (miss ? "MISS" : "—");
+          const winTag = r.win === true ? " · WIN" : (r.win === false ? " · LOSS" : "");
+          const priced = r.signal_with_price
+            || ((r.signal || "") + " @ " + num(r.price, 2));
+          const pnlVal = r.pnl_usd_per_oz != null ? r.pnl_usd_per_oz : r.pnl;
+          return `<tr>
+            <td>${(r.time || "").replace("T", " ").slice(0, 16)}</td>
+            <td><b class="${r.signal || ""}">${priced}</b></td>
+            <td>${r.actual || "—"}</td>
+            <td>${pct(r.confidence)}</td>
+            <td>${pnlVal != null ? num(pnlVal, 2) : "—"}</td>
+            <td class="${ok ? "ok" : (miss ? "miss" : "")}">${result}${winTag}</td>
+          </tr>`;
+        }).join("");
+      }
+    }
+
+    function paintTrain(m) {
+      const tr = m.train || {};
+      const wf = m.walkforward || {};
+      if (tr.n_params) $("params").textContent = Number(tr.n_params).toLocaleString();
+      else if (wf.n_params) $("params").textContent = Number(wf.n_params).toLocaleString();
+      if (tr.best_val_acc != null) $("tacc").textContent = pct(tr.best_val_acc);
+      if (tr.n_train != null) $("ntrain").textContent = Number(tr.n_train).toLocaleString();
+      if (tr.n_val != null) $("nval").textContent = Number(tr.n_val).toLocaleString();
+
+      const hist = tr.history_tail || [];
+      if (Array.isArray(hist) && hist.length) {
+        $("epochs").innerHTML = hist.map((row) => `<tr>
+          <td>${row.epoch ?? "—"}</td>
+          <td>${pct(row.train && row.train.acc)}</td>
+          <td>${pct(row.val && row.val.acc)}</td>
+          <td>${num(row.val && row.val.loss, 4)}</td>
+        </tr>`).join("");
+      } else {
+        $("epochs").innerHTML = `<tr><td colspan="4" class="muted">No epoch history yet</td></tr>`;
+      }
+
+      const counts = (tr.label_counts && tr.label_counts.all) || null;
+      if (counts) {
+        $("labelCounts").textContent =
+          "Label mix (SELL / HOLD / BUY): " +
+          [counts["0"] || counts[0] || 0, counts["1"] || counts[1] || 0, counts["2"] || counts[2] || 0].join(" / ");
+      }
+    }
+
     async function loadSide() {
       try {
-        const m = await get("metrics");
-        const bt = m.backtest || {};
-        const wf = m.walkforward || {};
-        const tr = m.train || {};
-        const acc = wf.direction_accuracy != null ? wf.direction_accuracy : bt.direction_accuracy;
-        const wr = wf.trade_winrate != null ? wf.trade_winrate : bt.win_rate;
-        const ntr = wf.n_trades != null ? wf.n_trades : bt.n_trades;
-        const pnl = wf.avg_trade_pnl_usd_per_oz != null ? wf.avg_trade_pnl_usd_per_oz : bt.avg_trade_pnl;
-        if (wf.holdout_days) $("hdays").textContent = wf.holdout_days.join(", ");
-        else if (bt.holdout_days) $("hdays").textContent = (bt.holdout_days || []).join(", ");
-        if (acc != null) $("vacc").textContent = pct(acc);
-        if (ntr != null) $("ntr").textContent = ntr;
-        if (wr != null) $("wr").textContent = pct(wr);
-        if (pnl != null) $("ret").textContent = Number(pnl).toFixed(2);
-        if (tr.n_params) $("params").textContent = Number(tr.n_params).toLocaleString();
-        if (m.latest_signal && (!$("asof").textContent)) {
-          paintSignal(m.latest_signal);
-        }
-        const wfs = m.walkforward_signals || bt.sample_signals || [];
-        if (wfs.length) {
-          $("wf").innerHTML = wfs.slice(0, 12).map((r) => `<tr>
-            <td>${(r.time || "").replace("T", " ").slice(0, 16)}</td>
-            <td><b class="${r.signal}">${r.signal_with_price || (r.signal + " @ " + Number(r.price).toFixed(2))}</b></td>
-            <td>${r.actual || "—"}</td>
-            <td>${r.correct ? "OK" : (r.correct === false ? "MISS" : "—")}</td>
-          </tr>`).join("");
-        }
-      } catch {}
+        const m = await api("metrics");
+        paintWalkforward(m);
+        paintTrain(m);
+        if (m.latest_signal && (!$("asof").textContent)) paintSignal(m.latest_signal);
+      } catch (e) {
+        $("wfNote").textContent = "Metrics unavailable: " + e.message;
+      }
       try {
-        const hist = await get("signals?limit=20");
+        const hist = await api("signals?limit=20");
         const rows = hist.results || [];
         if (!rows.length) return;
         $("log").innerHTML = rows.map((r) => `<tr>
           <td>${(r.logged_at || r.as_of || "").replace("T", " ").slice(0, 19)}</td>
-          <td><b class="${r.signal}">${r.signal_with_price || (r.signal + " @ " + Number(r.price).toFixed(2))}</b></td>
-          <td>${Number(r.price).toFixed(2)}</td>
+          <td><b class="${r.signal || ""}">${r.signal_with_price || ((r.signal || "") + " @ " + num(r.price, 2))}</b></td>
+          <td>${num(r.price, 2)}</td>
           <td>${pct(r.confidence)}</td>
           <td>${pct(r.p_buy)} / ${pct(r.p_hold)} / ${pct(r.p_sell)}</td>
         </tr>`).join("");
       } catch {}
     }
+
     async function refreshAll() {
       await loadQuote();
       await Promise.all([loadSignal(), loadSide()]);
     }
+
     $("refresh").onclick = refreshAll;
     loadQuote();
     loadSide();

@@ -13,6 +13,7 @@ htmlcov/
 data/**
 !data/.gitkeep
 artifacts/**
+!artifacts/
 !artifacts/.gitkeep
 !artifacts/metrics.example.json
 !artifacts/backtest.json
