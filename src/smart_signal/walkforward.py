@@ -19,10 +19,12 @@ from smart_signal.data.dataset import (
     fit_scaler,
     valid_indices,
 )
+from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.models.goldnet import build_goldnet, count_parameters
 from smart_signal.train import class_weights, prepare_frames, run_epoch, set_seed
 
 LABELS = {0: "SELL", 1: "HOLD", 2: "BUY"}
+CANDLE_LABELS = {0: "BEARISH", 1: "FLAT", 2: "BULLISH"}
 
 
 def trading_days(times: pd.Series, min_bars: int = 20) -> pd.DatetimeIndex:
@@ -127,8 +129,9 @@ def train_before_holdout(
         va = run_epoch(model, val_loader, optimizer=None, cfg=cfg, device=device, weights=weights)
         sched.step()
         history.append({"epoch": epoch, "train": tr, "val": va})
-        if va["acc"] > best_acc + 0.002:
-            best_acc = float(va["acc"])
+        score = float(va["acc"] + 0.4 * va.get("candle_acc", 0.0))
+        if score > best_acc + 0.002:
+            best_acc = score
             stale = 0
             torch.save(
                 {
@@ -145,8 +148,10 @@ def train_before_holdout(
         else:
             stale += 1
         print(
-            f"[walkforward] epoch {epoch:02d}  train_acc={tr['acc']:.3f}  "
-            f"val_acc={va['acc']:.3f}  best={best_acc:.3f}",
+            f"[walkforward] epoch {epoch:02d}  train_acc={tr['acc']:.3f} "
+            f"candle={tr.get('candle_acc', 0):.3f}  "
+            f"val_acc={va['acc']:.3f} candle={va.get('candle_acc', 0):.3f}  "
+            f"best={best_acc:.3f}",
             flush=True,
         )
         if stale >= patience:
@@ -198,9 +203,18 @@ def predict_holdout(
         batch_d = {k: v.to(device) for k, v in batch.items()}
         out = model(batch_d)
         probs = F.softmax(out["dir_logits"], dim=-1).cpu().numpy()
+        candle_probs = F.softmax(out["candle_logits"], dim=-1).cpu().numpy()
         y = batch["y_dir"].numpy()
+        y_candle = batch["y_candle"].numpy()
         ret = batch["y_ret"].numpy()
         close = batch["close"].numpy()
+        atr_b = batch["atr"].numpy() if "atr" in batch else None
+        y_up_t = batch["y_up"].numpy()
+        y_dn_t = batch["y_dn"].numpy()
+        y_loc_t = batch["y_close_loc"].numpy()
+        pred_up = out["y_up"].cpu().numpy()
+        pred_dn = out["y_dn"].cpu().numpy()
+        pred_loc = out["y_close_loc"].cpu().numpy()
         t_ns = batch["time_ns"].numpy()
         for i in range(len(y)):
             p = probs[i]
@@ -224,7 +238,9 @@ def predict_holdout(
                 ts = ts.tz_localize("UTC")
             else:
                 ts = ts.tz_convert("UTC")
-            atr_v = float(atr[src_i]) if atr[src_i] > 0 else price * 0.002
+            atr_v = float(atr_b[i]) if atr_b is not None else (
+                float(atr[src_i]) if atr[src_i] > 0 else price * 0.002
+            )
             signal = LABELS[cls]
             if signal == "BUY":
                 tp = price + float(label_cfg.get("tp_atr", 1.75)) * atr_v
@@ -239,6 +255,17 @@ def predict_holdout(
             direction = 1.0 if cls == 2 else (-1.0 if cls == 0 else 0.0)
             exit_px = price * float(np.exp(ret[i]))
             pnl = direction * (exit_px - price) - (spread if direction != 0 else 0.0)
+
+            candle_cls = int(np.argmax(candle_probs[i]))
+            true_candle = int(y_candle[i])
+            pred_hi, pred_lo, pred_cl = decode_next_ohlc(
+                price, atr_v, float(pred_up[i]), float(pred_dn[i]), float(pred_loc[i])
+            )
+            _th, _tl, true_cl = decode_next_ohlc(
+                price, atr_v, float(y_up_t[i]), float(y_dn_t[i]), float(y_loc_t[i])
+            )
+            close_mae = abs(pred_cl - true_cl)
+            range_width = pred_hi - pred_lo
             rows.append(
                 {
                     "time": ts.isoformat(),
@@ -258,6 +285,16 @@ def predict_holdout(
                     "pnl_usd_per_oz": round(float(pnl), 3),
                     "win": bool(pnl > 0) if signal in {"BUY", "SELL"} else None,
                     "horizon_bars": horizon,
+                    "candle_pred": CANDLE_LABELS[candle_cls],
+                    "candle_actual": CANDLE_LABELS[true_candle],
+                    "candle_correct": bool(candle_cls == true_candle),
+                    "pred_next_high": round(pred_hi, 3),
+                    "pred_next_low": round(pred_lo, 3),
+                    "pred_next_close": round(pred_cl, 3),
+                    "true_next_close": round(true_cl, 3),
+                    "close_mae": round(float(close_mae), 3),
+                    "pred_range_width": round(float(range_width), 3),
+                    "ohlc_ok": bool(pred_lo <= pred_cl <= pred_hi),
                 }
             )
         cursor += len(y)
@@ -265,11 +302,16 @@ def predict_holdout(
     return rows
 
 
+
 def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, Any]:
     n = len(rows)
     n_correct = sum(1 for r in rows if r["correct"])
     trades = [r for r in rows if r["signal"] in {"BUY", "SELL"}]
     wins = [r for r in trades if r.get("win")]
+    candle_n = sum(1 for r in rows if r.get("candle_correct") is not None)
+    candle_ok = sum(1 for r in rows if r.get("candle_correct"))
+    close_maes = [float(r["close_mae"]) for r in rows if r.get("close_mae") is not None]
+    widths = [float(r["pred_range_width"]) for r in rows if r.get("pred_range_width") is not None]
     by_day: dict[str, Any] = {}
     for day in holdout_days:
         day_rows = [r for r in rows if r["day"] == day]
@@ -281,10 +323,18 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
                 (sum(1 for r in day_rows if r["correct"]) / len(day_rows)) if day_rows else 0.0,
                 4,
             ),
+            "candle_accuracy": round(
+                (sum(1 for r in day_rows if r.get("candle_correct")) / len(day_rows)) if day_rows else 0.0,
+                4,
+            ),
             "trades": len(day_trades),
             "trade_winrate": round((len(day_wins) / len(day_trades)) if day_trades else 0.0, 4),
             "avg_pnl_usd_per_oz": round(
                 float(np.mean([r["pnl_usd_per_oz"] for r in day_trades])) if day_trades else 0.0,
+                3,
+            ),
+            "avg_close_mae": round(
+                float(np.mean([r["close_mae"] for r in day_rows])) if day_rows else 0.0,
                 3,
             ),
         }
@@ -292,6 +342,10 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
         "holdout_days": holdout_days,
         "n_bars": n,
         "direction_accuracy": round((n_correct / n) if n else 0.0, 4),
+        "candle_accuracy": round((candle_ok / candle_n) if candle_n else 0.0, 4),
+        "avg_close_mae": round(float(np.mean(close_maes)) if close_maes else 0.0, 3),
+        "avg_pred_range_width": round(float(np.mean(widths)) if widths else 0.0, 3),
+        "ohlc_ok_rate": round((sum(1 for r in rows if r.get("ohlc_ok")) / n) if n else 0.0, 4),
         "n_trades": len(trades),
         "trade_winrate": round((len(wins) / len(trades)) if trades else 0.0, 4),
         "avg_trade_pnl_usd_per_oz": round(
@@ -305,6 +359,7 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
     }
 
 
+
 def run_walkforward(
     cfg: dict[str, Any] | None = None,
     *,
@@ -315,7 +370,7 @@ def run_walkforward(
     cfg = cfg or load_config()
     train_cfg = cfg.get("train") or {}
     n_hold = max(1, int(holdout_days))
-    n_epochs = int(epochs if epochs is not None else min(12, int(train_cfg.get("epochs", 18))))
+    n_epochs = int(epochs if epochs is not None else min(18, int(train_cfg.get("epochs", 28))))
 
     frames = prepare_frames(cfg)
     indices = valid_indices(frames, cfg)
@@ -360,6 +415,10 @@ def run_walkforward(
                 "n_trades": summary["n_trades"],
                 "win_rate": summary["trade_winrate"],
                 "direction_accuracy": summary["direction_accuracy"],
+                "candle_accuracy": summary.get("candle_accuracy"),
+                "avg_close_mae": summary.get("avg_close_mae"),
+                "avg_pred_range_width": summary.get("avg_pred_range_width"),
+                "ohlc_ok_rate": summary.get("ohlc_ok_rate"),
                 "holdout_days": summary["holdout_days"],
                 "avg_trade_pnl": summary["avg_trade_pnl_usd_per_oz"],
                 "train_val_acc": summary["train_val_acc"],

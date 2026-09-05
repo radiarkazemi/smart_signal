@@ -33,10 +33,18 @@ def test_model_forward_shapes():
     model = build_goldnet(cfg)
     out = model(batch, explain=True)
     assert out["dir_logits"].shape == (4, 3)
+    assert out["candle_logits"].shape == (4, 3)
     assert out["y_ret"].shape == (4,)
     assert out["y_vol"].shape == (4,)
+    assert out["y_up"].shape == (4,)
+    assert out["y_dn"].shape == (4,)
+    assert out["y_close_loc"].shape == (4,)
+    assert (out["y_up"] >= 0).all()
+    assert (out["y_dn"] >= 0).all()
+    assert ((out["y_close_loc"] >= 0) & (out["y_close_loc"] <= 1)).all()
     assert out["vsn_15m"].shape[0] == 4
     assert count_parameters(model) > 100_000
+    assert "y_up" in ds[0] and "atr" in ds[0]
 
 
 def test_windows_match_lookback():

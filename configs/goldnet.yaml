@@ -90,7 +90,7 @@ label:
 
 train:
   batch_size: 48
-  epochs: 22
+  epochs: 28
   lr: 0.00028
   weight_decay: 0.0004
   warmup_frac: 0.08
@@ -100,11 +100,11 @@ train:
   num_workers: 0
   seed: 42
   focal_gamma: 1.6
-  return_loss_w: 0.28
-  candle_loss_w: 0.35
-  path_loss_w: 0.18
+  return_loss_w: 0.22
+  candle_loss_w: 0.65
+  path_loss_w: 0.45
   vol_loss_w: 0.10
-  patience: 8
+  patience: 10
 
 inference:
   hold_threshold: 0.42

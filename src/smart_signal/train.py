@@ -69,8 +69,9 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
         source_15m = _load_training_15m()
     frames = build_timeframes(base_15m=source_15m)
     pub = data_dir() / "public"
-    from smart_signal.features.indicators import add_features
+    from smart_signal.features.indicators import FEATURE_COLUMNS, add_features
     from smart_signal.data.ohlcv import resample_ohlcv as _rs
+    from smart_signal.features.mtf_align import attach_mtf_alignment
 
     def _merge(primary: pd.DataFrame, extra: pd.DataFrame) -> pd.DataFrame:
         cols = ["time", "open", "high", "low", "close", "volume"]
@@ -81,12 +82,32 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
         merged = merged.sort_values("time").drop_duplicates("time", keep="last")
         return add_features(merged.reset_index(drop=True))
 
+    merged_htf = False
     if (pub / "gc_1h.parquet").exists():
         extra_1h = load_parquet(pub / "gc_1h.parquet")
         frames["1h"] = _merge(frames["1h"], extra_1h)
         frames["4h"] = _merge(frames["4h"], _rs(extra_1h, "4h"))
+        merged_htf = True
     if (pub / "gc_1d.parquet").exists():
         frames["1d"] = _merge(frames["1d"], load_parquet(pub / "gc_1d.parquet"))
+        merged_htf = True
+    if merged_htf:
+        # Parent bars changed — rebuild weekly + nested MTF alignment onto children.
+        if "1d" in frames and not frames["1d"].empty:
+            frames["1w"] = add_features(
+                _rs(frames["1d"][["time", "open", "high", "low", "close", "volume"]], "1w")
+            )
+        frames = attach_mtf_alignment(frames)
+        for tf, df in list(frames.items()):
+            if df is None or df.empty:
+                continue
+            for col in FEATURE_COLUMNS:
+                if col not in df.columns:
+                    df[col] = 0.0
+            df[FEATURE_COLUMNS] = (
+                df[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+            )
+            frames[tf] = df
     return label_signal_frame(frames, cfg)
 
 
@@ -227,9 +248,11 @@ def train_model(
         sched.step()
         row = {"epoch": epoch, "train": tr, "val": va, "lr": opt.param_groups[0]["lr"]}
         history.append(row)
-        improved = va["acc"] > best_acc + 0.002
+        improved = (va["acc"] + 0.4 * va.get("candle_acc", 0.0)) > (
+            best_acc + 0.002
+        )
         if improved:
-            best_acc = va["acc"]
+            best_acc = float(va["acc"] + 0.4 * va.get("candle_acc", 0.0))
             stale = 0
             payload = {
                 "model": model.state_dict(),
@@ -245,8 +268,10 @@ def train_model(
         else:
             stale += 1
         print(
-            f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f}  "
-            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f}  best_acc={best_acc:.3f}",
+            f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f} "
+            f"candle={tr.get('candle_acc', 0):.3f}  "
+            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f} "
+            f"candle={va.get('candle_acc', 0):.3f}  best={best_acc:.3f}",
             flush=True,
         )
         if stale >= patience:

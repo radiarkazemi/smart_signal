@@ -29,18 +29,30 @@ def multi_task_loss(
     gamma: float,
     return_w: float,
     vol_w: float,
-    candle_w: float = 0.45,
-    path_w: float = 0.25,
+    candle_w: float = 0.55,
+    path_w: float = 0.35,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     ce = focal_ce(outputs["dir_logits"], batch["y_dir"], weight=class_weight, gamma=gamma)
     ret = F.smooth_l1_loss(outputs["y_ret"], batch["y_ret"])
     vol = F.smooth_l1_loss(outputs["y_vol"], batch["y_vol"])
-    candle = focal_ce(outputs["candle_logits"], batch["y_candle"], weight=None, gamma=max(1.0, gamma - 0.3))
+
+    # Candle direction: weight away from flat so bull/bear matter more.
+    candle_counts = torch.bincount(batch["y_candle"], minlength=3).float().clamp_min(1.0)
+    candle_weight = (candle_counts.sum() / (3.0 * candle_counts)).to(batch["y_candle"].device)
+    candle = focal_ce(
+        outputs["candle_logits"],
+        batch["y_candle"],
+        weight=candle_weight,
+        gamma=max(1.0, gamma - 0.2),
+    )
+
+    # ATR-scaled OHLC path (stable + geometry-aware).
     path = (
-        F.smooth_l1_loss(outputs["y_next_high"], batch["y_next_high"])
-        + F.smooth_l1_loss(outputs["y_next_low"], batch["y_next_low"])
-        + F.smooth_l1_loss(outputs["y_next_close"], batch["y_next_close"])
+        F.smooth_l1_loss(outputs["y_up"], batch["y_up"])
+        + F.smooth_l1_loss(outputs["y_dn"], batch["y_dn"])
+        + F.smooth_l1_loss(outputs["y_close_loc"], batch["y_close_loc"])
     ) / 3.0
+
     total = ce + return_w * ret + vol_w * vol + candle_w * candle + path_w * path
     parts = {
         "loss": float(total.detach().cpu()),

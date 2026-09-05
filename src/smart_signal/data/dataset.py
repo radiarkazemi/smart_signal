@@ -182,10 +182,14 @@ class MTFGoldDataset(Dataset):
         self.y_ret = sig["y_ret"].to_numpy(dtype=np.float32)
         self.y_vol = sig["y_vol"].to_numpy(dtype=np.float32)
         self.y_candle = sig["y_candle"].to_numpy(dtype=np.int64)
-        self.y_next_high = sig["y_next_high"].to_numpy(dtype=np.float32)
-        self.y_next_low = sig["y_next_low"].to_numpy(dtype=np.float32)
-        self.y_next_close = sig["y_next_close"].to_numpy(dtype=np.float32)
+        self.y_up = sig["y_up"].to_numpy(dtype=np.float32)
+        self.y_dn = sig["y_dn"].to_numpy(dtype=np.float32)
+        self.y_close_loc = sig["y_close_loc"].to_numpy(dtype=np.float32)
         self.close = sig["close"].to_numpy(dtype=np.float32)
+        if "atr" in sig.columns:
+            self.atr = sig["atr"].to_numpy(dtype=np.float32)
+        else:
+            self.atr = np.maximum(self.close * 0.0015, 1e-3).astype(np.float32)
         self.sig_times = _time_ns(sig)
 
     def _scale(self, mat: np.ndarray) -> np.ndarray:
@@ -223,9 +227,10 @@ class MTFGoldDataset(Dataset):
             "y_ret": torch.tensor(self.y_ret[i], dtype=torch.float32),
             "y_vol": torch.tensor(self.y_vol[i], dtype=torch.float32),
             "y_candle": torch.tensor(self.y_candle[i], dtype=torch.long),
-            "y_next_high": torch.tensor(self.y_next_high[i], dtype=torch.float32),
-            "y_next_low": torch.tensor(self.y_next_low[i], dtype=torch.float32),
-            "y_next_close": torch.tensor(self.y_next_close[i], dtype=torch.float32),
+            "y_up": torch.tensor(self.y_up[i], dtype=torch.float32),
+            "y_dn": torch.tensor(self.y_dn[i], dtype=torch.float32),
+            "y_close_loc": torch.tensor(self.y_close_loc[i], dtype=torch.float32),
+            "atr": torch.tensor(self.atr[i], dtype=torch.float32),
             "close": torch.tensor(self.close[i], dtype=torch.float32),
             "time_ns": torch.tensor(t, dtype=torch.int64),
         }

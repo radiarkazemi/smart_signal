@@ -16,6 +16,7 @@ from smart_signal.data.forexcom import fetch_history, fetch_live_1m_bars, fetch_
 from smart_signal.data.ohlcv import load_parquet, resample_ohlcv
 from smart_signal.config import data_dir
 from smart_signal.features.indicators import FEATURE_COLUMNS
+from smart_signal.labels.next_candle import decode_next_ohlc
 from smart_signal.models.goldnet import build_goldnet
 
 LABELS = {0: "SELL", 1: "HOLD", 2: "BUY"}
@@ -48,6 +49,8 @@ class Signal:
     pred_next_low: float = 0.0
     pred_next_close: float = 0.0
     ict_summary: str = ""
+    ohlc_ok: bool = True
+    pred_range_width: float = 0.0
 
 
 class SignalEngine:
@@ -71,12 +74,28 @@ class SignalEngine:
     def _frames_from_1m(self, df_1m: pd.DataFrame) -> dict[str, pd.DataFrame]:
         frames = build_timeframes(base_1m=df_1m)
         extras = self._load_htf_extra()
+        merged = False
         if "1h" in extras:
             frames["1h"] = _merge_tf(frames["1h"], extras["1h"])
+            merged = True
         if "4h" in extras:
             frames["4h"] = _merge_tf(frames["4h"], extras["4h"])
+            merged = True
         if "1d" in extras:
             frames["1d"] = _merge_tf(frames["1d"], extras["1d"])
+            merged = True
+        if merged:
+            from smart_signal.data.ohlcv import resample_ohlcv
+            from smart_signal.features.indicators import add_features
+            from smart_signal.features.mtf_align import attach_mtf_alignment
+
+            if "1d" in frames and not frames["1d"].empty:
+                frames["1w"] = add_features(
+                    resample_ohlcv(
+                        frames["1d"][["time", "open", "high", "low", "close", "volume"]], "1w"
+                    )
+                )
+            frames = attach_mtf_alignment(frames)
         return frames
 
     def _load_htf_extra(self) -> dict[str, pd.DataFrame]:
@@ -128,20 +147,20 @@ class SignalEngine:
         reasons = _explain(out, probs, signal)
         candle_probs = F.softmax(out["candle_logits"], dim=-1).squeeze(0).cpu().numpy()
         candle_cls = int(np.argmax(candle_probs))
-        pred_hi = float(price * np.exp(float(out["y_next_high"].squeeze().cpu())))
-        pred_lo = float(price * np.exp(float(out["y_next_low"].squeeze().cpu())))
-        pred_cl = float(price * np.exp(float(out["y_next_close"].squeeze().cpu())))
-        # Keep OHLC geometry coherent for the dashboard / traders.
-        if pred_lo > pred_hi:
-            pred_lo, pred_hi = pred_hi, pred_lo
-        pred_cl = float(min(max(pred_cl, pred_lo), pred_hi))
+        y_up = float(out["y_up"].squeeze().cpu())
+        y_dn = float(out["y_dn"].squeeze().cpu())
+        y_close_loc = float(out["y_close_loc"].squeeze().cpu())
+        pred_hi, pred_lo, pred_cl = decode_next_ohlc(price, atr, y_up, y_dn, y_close_loc)
+        ohlc_ok = bool(pred_lo <= pred_cl <= pred_hi)
+        range_width = max(pred_hi - pred_lo, 0.0)
         ict_summary = _ict_snapshot(frames["15m"])
         reasons.append(
             f"Next candle {CANDLE_LABELS[candle_cls]} "
             f"(bear={candle_probs[0]:.0%} flat={candle_probs[1]:.0%} bull={candle_probs[2]:.0%})"
         )
         reasons.append(
-            f"Predicted next range {pred_lo:.2f} – {pred_hi:.2f} (close≈{pred_cl:.2f})"
+            f"Predicted next range {pred_lo:.2f} – {pred_hi:.2f} "
+            f"(close≈{pred_cl:.2f}, width={range_width:.2f})"
         )
         if ict_summary:
             reasons.append(ict_summary)
@@ -171,6 +190,8 @@ class SignalEngine:
             pred_next_low=round(pred_lo, 3),
             pred_next_close=round(pred_cl, 3),
             ict_summary=ict_summary,
+            ohlc_ok=ohlc_ok,
+            pred_range_width=round(range_width, 3),
         )
 
     def live_signal(self) -> Signal:

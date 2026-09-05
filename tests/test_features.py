@@ -8,7 +8,7 @@ from smart_signal.features.candle_structure import CANDLE_COLUMNS, add_candle_st
 from smart_signal.features.ict import ICT_COLUMNS, add_ict_features
 from smart_signal.features.indicators import FEATURE_COLUMNS, add_features, feature_matrix, rsi
 from smart_signal.features.mtf_align import attach_mtf_alignment
-from smart_signal.labels.next_candle import BULL, next_candle_labels
+from smart_signal.labels.next_candle import BULL, decode_next_ohlc, next_candle_labels
 from smart_signal.labels.triple_barrier import BUY, HOLD, SELL, triple_barrier_labels
 
 
@@ -55,6 +55,18 @@ def test_next_candle_labels_uptrend():
     labeled = next_candle_labels(add_features(df))
     assert (labeled["y_candle"][:-1] == BULL).mean() > 0.7
     assert labeled["y_next_high"].iloc[0] > 0
+    assert (labeled["y_up"][:-1] >= 0).all()
+    assert (labeled["y_dn"][:-1] >= 0).all()
+    assert labeled["y_close_loc"].between(0.0, 1.0).all()
+
+
+def test_decode_next_ohlc_consistent_and_clamped():
+    hi, lo, cl = decode_next_ohlc(4400.0, 10.0, 1.5, 1.2, 0.6)
+    assert lo <= cl <= hi
+    # Extreme softplus outputs are capped to max_atr_mult ATRs.
+    hi2, lo2, cl2 = decode_next_ohlc(4400.0, 10.0, 50.0, 50.0, 0.5, max_atr_mult=4.0)
+    assert lo2 <= cl2 <= hi2
+    assert abs((hi2 - lo2) - 80.0) < 1e-6
 
 
 def test_triple_barrier_uptrend_not_all_sell():
