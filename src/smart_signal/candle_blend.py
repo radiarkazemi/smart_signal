@@ -1,7 +1,7 @@
 """Blend GoldNet candle probs with a structure-only ICT/MTF logistic prior.
 
-The logistic is trained on candle+ICT+nested-MTF columns only (no leakage).
-Alpha is selected on an inner validation split; default artifact ships alpha=0.35.
+Portable artifact stores scaler + logistic coefficients (no sklearn model pickle),
+so live servers remain compatible across scikit-learn versions.
 """
 
 from __future__ import annotations
@@ -41,9 +41,28 @@ def load_candle_blend(path: Path | None = None) -> dict[str, Any] | None:
         if not p.exists():
             continue
         payload = joblib.load(p)
+        # Accept legacy sklearn-pickle artifacts by extracting coefficients.
+        if "coef" not in payload and "clf" in payload:
+            clf = payload["clf"]
+            sc = payload["scaler"]
+            payload = {
+                "cols": payload["cols"],
+                "alpha": float(payload.get("alpha", 0.35)),
+                "classes": [int(c) for c in clf.classes_],
+                "coef": np.asarray(clf.coef_, dtype=np.float64),
+                "intercept": np.asarray(clf.intercept_, dtype=np.float64),
+                "scaler_mean": np.asarray(sc.mean_, dtype=np.float64),
+                "scaler_scale": np.asarray(sc.scale_, dtype=np.float64),
+            }
         _BLEND = payload
         return payload
     return None
+
+
+def _softmax(z: np.ndarray) -> np.ndarray:
+    z = z - np.max(z)
+    e = np.exp(z)
+    return e / np.maximum(e.sum(), 1e-12)
 
 
 def structure_candle_probs(row: dict[str, Any] | Any, blend: dict[str, Any] | None = None) -> np.ndarray | None:
@@ -61,12 +80,26 @@ def structure_candle_probs(row: dict[str, Any] | Any, blend: dict[str, Any] | No
         if not np.isfinite(v):
             v = 0.0
         vals.append(v)
-    x = np.asarray(vals, dtype=np.float64).reshape(1, -1)
-    x = blend["scaler"].transform(x)
-    proba = blend["clf"].predict_proba(x)[0]
-    out = np.zeros(3, dtype=np.float64)
-    for j, c in enumerate(blend["clf"].classes_):
-        out[int(c)] = float(proba[j])
+    x = np.asarray(vals, dtype=np.float64)
+    mean = np.asarray(blend["scaler_mean"], dtype=np.float64)
+    scale = np.asarray(blend["scaler_scale"], dtype=np.float64)
+    scale = np.where(scale <= 1e-12, 1.0, scale)
+    x = (x - mean) / scale
+    coef = np.asarray(blend["coef"], dtype=np.float64)
+    intercept = np.asarray(blend["intercept"], dtype=np.float64)
+    classes = [int(c) for c in blend["classes"]]
+    if coef.ndim == 1:
+        coef = coef.reshape(1, -1)
+    # sklearn multinomial: logits = X @ coef.T + intercept
+    logits = coef @ x + intercept
+    if logits.size == 1 and len(classes) == 2:
+        # binary fallback
+        p1 = 1.0 / (1.0 + np.exp(-float(logits[0])))
+        probs = {classes[0]: 1.0 - p1, classes[1]: p1}
+    else:
+        sm = _softmax(logits)
+        probs = {classes[i]: float(sm[i]) for i in range(len(classes))}
+    out = np.array([probs.get(0, 0.0), probs.get(1, 0.0), probs.get(2, 0.0)], dtype=np.float64)
     s = out.sum()
     return out / s if s > 0 else np.array([1 / 3, 1 / 3, 1 / 3])
 
