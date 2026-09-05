@@ -18,6 +18,7 @@ artifacts/**
 !artifacts/metrics.example.json
 !artifacts/backtest.json
 !artifacts/walkforward.json
+!artifacts/train_metrics.json
 web/node_modules/
 .DS_Store
 *.pt

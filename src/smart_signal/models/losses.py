@@ -29,15 +29,25 @@ def multi_task_loss(
     gamma: float,
     return_w: float,
     vol_w: float,
+    candle_w: float = 0.45,
+    path_w: float = 0.25,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     ce = focal_ce(outputs["dir_logits"], batch["y_dir"], weight=class_weight, gamma=gamma)
     ret = F.smooth_l1_loss(outputs["y_ret"], batch["y_ret"])
     vol = F.smooth_l1_loss(outputs["y_vol"], batch["y_vol"])
-    total = ce + return_w * ret + vol_w * vol
+    candle = focal_ce(outputs["candle_logits"], batch["y_candle"], weight=None, gamma=max(1.0, gamma - 0.3))
+    path = (
+        F.smooth_l1_loss(outputs["y_next_high"], batch["y_next_high"])
+        + F.smooth_l1_loss(outputs["y_next_low"], batch["y_next_low"])
+        + F.smooth_l1_loss(outputs["y_next_close"], batch["y_next_close"])
+    ) / 3.0
+    total = ce + return_w * ret + vol_w * vol + candle_w * candle + path_w * path
     parts = {
         "loss": float(total.detach().cpu()),
         "ce": float(ce.detach().cpu()),
         "ret": float(ret.detach().cpu()),
         "vol": float(vol.detach().cpu()),
+        "candle": float(candle.detach().cpu()),
+        "path": float(path.detach().cpu()),
     }
     return total, parts

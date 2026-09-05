@@ -136,6 +136,10 @@
         <div class="kv"><span>Expected move</span><b id="move">—</b></div>
         <div class="kv"><span>Take profit</span><b id="tp">—</b></div>
         <div class="kv"><span>Stop loss</span><b id="sl">—</b></div>
+        <div class="kv"><span>Next candle</span><b id="candleBias">—</b></div>
+        <div class="kv"><span>Pred next close</span><b id="predClose">—</b></div>
+        <div class="kv"><span>Pred next range</span><b id="predRange">—</b></div>
+        <div class="kv"><span>ICT now</span><b id="ictNow">—</b></div>
       </div>
       <p class="muted" id="reasons" style="margin-top:14px"></p>
     </section>
@@ -237,6 +241,15 @@
         `<i style="width:${(data.p_hold || 0) * 100}%;background:#8b8680"></i>` +
         `<i style="width:${(data.p_buy || 0) * 100}%;background:#3dd68c"></i>`;
       $("reasons").textContent = (data.reasons || []).join(" · ");
+      if ($("candleBias")) {
+        $("candleBias").textContent = data.candle_bias || "—";
+        $("candleBias").className = (data.candle_bias === "BULLISH") ? "BUY" : (data.candle_bias === "BEARISH" ? "SELL" : "");
+        $("predClose").textContent = data.pred_next_close != null ? Number(data.pred_next_close).toFixed(2) : "—";
+        if (data.pred_next_low != null && data.pred_next_high != null) {
+          $("predRange").textContent = Number(data.pred_next_low).toFixed(2) + " – " + Number(data.pred_next_high).toFixed(2);
+        }
+        $("ictNow").textContent = data.ict_summary || "—";
+      }
       if (data.model_params) $("params").textContent = Number(data.model_params).toLocaleString();
     }
 

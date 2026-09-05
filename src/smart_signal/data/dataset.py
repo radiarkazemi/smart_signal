@@ -10,6 +10,8 @@ from torch.utils.data import Dataset
 
 from smart_signal.data.ohlcv import resample_ohlcv
 from smart_signal.features.indicators import FEATURE_COLUMNS, add_features, feature_matrix
+from smart_signal.features.mtf_align import attach_mtf_alignment
+from smart_signal.labels.next_candle import next_candle_labels
 from smart_signal.labels.triple_barrier import triple_barrier_labels
 
 SIGNAL_TF = "15m"
@@ -21,11 +23,40 @@ def build_timeframes(base_15m: pd.DataFrame | None = None, base_1m: pd.DataFrame
         if base_1m is None or base_1m.empty:
             raise ValueError("Need 15m or 1m OHLCV to build timeframes")
         base_15m = resample_ohlcv(base_1m, "15m")
-    frames = {"15m": add_features(base_15m)}
     src = base_15m
-    frames["1h"] = add_features(resample_ohlcv(src, "1h"))
-    frames["4h"] = add_features(resample_ohlcv(src, "4h"))
-    frames["1d"] = add_features(resample_ohlcv(src, "1d"))
+    raw: dict[str, pd.DataFrame] = {
+        "15m": src,
+        "1h": resample_ohlcv(src, "1h"),
+        "4h": resample_ohlcv(src, "4h"),
+        "1d": resample_ohlcv(src, "1d"),
+    }
+    if base_1m is not None and not base_1m.empty:
+        raw["5m"] = resample_ohlcv(base_1m, "5m")
+    raw["1w"] = resample_ohlcv(raw["1d"], "1w")
+
+    # Per-TF candle + ICT features first, then nested HTF alignment on top.
+    frames = {tf: add_features(df) for tf, df in raw.items()}
+    from smart_signal.features.mtf_align import ensure_alignment_frames
+
+    frames = ensure_alignment_frames(frames, base_15m=src, base_1m=base_1m)
+    # Feature-ize any newly created 5m/1w frames before alignment math.
+    for tf, df in list(frames.items()):
+        if df is None or df.empty:
+            continue
+        if not set(FEATURE_COLUMNS).issubset(df.columns):
+            frames[tf] = add_features(df[["time", "open", "high", "low", "close", "volume"]].copy())
+    frames = attach_mtf_alignment(frames)
+    # Re-freeze feature matrix columns after alignment overwrite.
+    for tf, df in list(frames.items()):
+        if df is None or df.empty:
+            continue
+        for col in FEATURE_COLUMNS:
+            if col not in df.columns:
+                df[col] = 0.0
+        df[FEATURE_COLUMNS] = (
+            df[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+        )
+        frames[tf] = df
     return frames
 
 
@@ -38,6 +69,10 @@ def label_signal_frame(frames: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> 
         tp_atr=float(label_cfg.get("tp_atr", 1.75)),
         sl_atr=float(label_cfg.get("sl_atr", 1.15)),
         min_atr_pct=float(label_cfg.get("min_atr_pct", 0.0004)),
+    )
+    frames["15m"] = next_candle_labels(
+        frames["15m"],
+        flat_body_pct=float(label_cfg.get("flat_body_pct", 0.08)),
     )
     return frames
 
@@ -146,6 +181,10 @@ class MTFGoldDataset(Dataset):
         self.y_dir = sig["y_dir"].to_numpy(dtype=np.int64)
         self.y_ret = sig["y_ret"].to_numpy(dtype=np.float32)
         self.y_vol = sig["y_vol"].to_numpy(dtype=np.float32)
+        self.y_candle = sig["y_candle"].to_numpy(dtype=np.int64)
+        self.y_next_high = sig["y_next_high"].to_numpy(dtype=np.float32)
+        self.y_next_low = sig["y_next_low"].to_numpy(dtype=np.float32)
+        self.y_next_close = sig["y_next_close"].to_numpy(dtype=np.float32)
         self.close = sig["close"].to_numpy(dtype=np.float32)
         self.sig_times = _time_ns(sig)
 
@@ -183,6 +222,10 @@ class MTFGoldDataset(Dataset):
             "y_dir": torch.tensor(self.y_dir[i], dtype=torch.long),
             "y_ret": torch.tensor(self.y_ret[i], dtype=torch.float32),
             "y_vol": torch.tensor(self.y_vol[i], dtype=torch.float32),
+            "y_candle": torch.tensor(self.y_candle[i], dtype=torch.long),
+            "y_next_high": torch.tensor(self.y_next_high[i], dtype=torch.float32),
+            "y_next_low": torch.tensor(self.y_next_low[i], dtype=torch.float32),
+            "y_next_close": torch.tensor(self.y_next_close[i], dtype=torch.float32),
             "close": torch.tensor(self.close[i], dtype=torch.float32),
             "time_ns": torch.tensor(t, dtype=torch.int64),
         }

@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from smart_signal.features.candle_structure import CANDLE_COLUMNS, add_candle_structure
+from smart_signal.features.ict import ICT_COLUMNS, add_ict_features
+
 FEATURE_COLUMNS = [
+    # Classic OHLC geometry + momentum
     "log_ret",
     "rng_pct",
     "body_pct",
@@ -26,6 +30,18 @@ FEATURE_COLUMNS = [
     "hour_cos",
     "dow_sin",
     "dow_cos",
+    # Candle structure (OHLC / OLHC path)
+    *CANDLE_COLUMNS,
+    # ICT concepts
+    *ICT_COLUMNS,
+    # Nested MTF alignment (filled later by attach_mtf_alignment; zeros if missing)
+    "htf_open_dist",
+    "htf_mid_dist",
+    "htf_range_loc",
+    "htf_trend_align",
+    "htf_same_dir",
+    "parent_body",
+    "nested_pos",
 ]
 
 
@@ -57,17 +73,11 @@ def rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def true_range(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> np.ndarray:
+def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     prev_close = np.roll(close, 1)
     prev_close[0] = close[0]
-    a = high - low
-    b = np.abs(high - prev_close)
-    c = np.abs(low - prev_close)
-    return np.maximum(np.maximum(a, b), c)
-
-
-def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    return _rma(true_range(high, low, close), period)
+    tr = np.maximum(high - low, np.maximum(np.abs(high - prev_close), np.abs(low - prev_close)))
+    return _rma(tr, period)
 
 
 def macd(close: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -146,10 +156,31 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     out["hour_cos"] = np.cos(2 * np.pi * hour / 24.0)
     out["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
     out["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
+
+    out = add_candle_structure(out)
+    out = add_ict_features(out)
+
+    # MTF alignment columns may be attached later; default zeros keep matrix shape stable.
+    for col in (
+        "htf_open_dist",
+        "htf_mid_dist",
+        "htf_range_loc",
+        "htf_trend_align",
+        "htf_same_dir",
+        "parent_body",
+        "nested_pos",
+    ):
+        if col not in out.columns:
+            out[col] = 0.0
+
     feat = out[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     out[FEATURE_COLUMNS] = feat.astype(np.float32)
     return out
 
 
 def feature_matrix(df: pd.DataFrame) -> np.ndarray:
+    missing = [c for c in FEATURE_COLUMNS if c not in df.columns]
+    if missing:
+        for c in missing:
+            df[c] = 0.0
     return df[FEATURE_COLUMNS].to_numpy(dtype=np.float32)

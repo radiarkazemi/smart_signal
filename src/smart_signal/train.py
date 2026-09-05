@@ -110,8 +110,9 @@ def run_epoch(
     train_cfg = cfg.get("train") or {}
     training = optimizer is not None
     model.train(training)
-    totals = {"loss": 0.0, "ce": 0.0, "ret": 0.0, "vol": 0.0, "acc": 0.0, "n": 0.0}
+    totals = {"loss": 0.0, "ce": 0.0, "ret": 0.0, "vol": 0.0, "candle": 0.0, "path": 0.0, "acc": 0.0, "n": 0.0}
     correct = 0
+    candle_correct = 0
     seen = 0
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
@@ -125,6 +126,8 @@ def run_epoch(
             gamma=float(train_cfg.get("focal_gamma", 1.6)),
             return_w=float(train_cfg.get("return_loss_w", 0.32)),
             vol_w=float(train_cfg.get("vol_loss_w", 0.12)),
+            candle_w=float(train_cfg.get("candle_loss_w", 0.45)),
+            path_w=float(train_cfg.get("path_loss_w", 0.25)),
         )
         if training:
             loss.backward()
@@ -134,9 +137,10 @@ def run_epoch(
             optimizer.step()
         pred = outputs["dir_logits"].argmax(dim=-1)
         correct += int((pred == batch["y_dir"]).sum().item())
+        candle_correct += int((outputs["candle_logits"].argmax(dim=-1) == batch["y_candle"]).sum().item())
         seen += int(batch["y_dir"].size(0))
-        for k in ("loss", "ce", "ret", "vol"):
-            totals[k] += parts[k] * batch["y_dir"].size(0)
+        for k in ("loss", "ce", "ret", "vol", "candle", "path"):
+            totals[k] += parts.get(k, 0.0) * batch["y_dir"].size(0)
         totals["n"] += batch["y_dir"].size(0)
     n = max(totals["n"], 1.0)
     return {
@@ -144,7 +148,10 @@ def run_epoch(
         "ce": totals["ce"] / n,
         "ret": totals["ret"] / n,
         "vol": totals["vol"] / n,
+        "candle": totals["candle"] / n,
+        "path": totals["path"] / n,
         "acc": correct / max(seen, 1),
+        "candle_acc": candle_correct / max(seen, 1),
     }
 
 

@@ -19,6 +19,7 @@ from smart_signal.features.indicators import FEATURE_COLUMNS
 from smart_signal.models.goldnet import build_goldnet
 
 LABELS = {0: "SELL", 1: "HOLD", 2: "BUY"}
+CANDLE_LABELS = {0: "BEARISH", 1: "FLAT", 2: "BULLISH"}
 
 
 @dataclass
@@ -39,6 +40,14 @@ class Signal:
     as_of: str
     model_params: int
     reasons: list[str]
+    candle_bias: str = "FLAT"
+    p_bear: float = 0.0
+    p_flat: float = 0.0
+    p_bull: float = 0.0
+    pred_next_high: float = 0.0
+    pred_next_low: float = 0.0
+    pred_next_close: float = 0.0
+    ict_summary: str = ""
 
 
 class SignalEngine:
@@ -117,6 +126,21 @@ class SignalEngine:
             tp = price
             sl = price
         reasons = _explain(out, probs, signal)
+        candle_probs = F.softmax(out["candle_logits"], dim=-1).squeeze(0).cpu().numpy()
+        candle_cls = int(np.argmax(candle_probs))
+        pred_hi = float(price * np.exp(float(out["y_next_high"].squeeze().cpu())))
+        pred_lo = float(price * np.exp(float(out["y_next_low"].squeeze().cpu())))
+        pred_cl = float(price * np.exp(float(out["y_next_close"].squeeze().cpu())))
+        ict_summary = _ict_snapshot(frames["15m"])
+        reasons.append(
+            f"Next candle {CANDLE_LABELS[candle_cls]} "
+            f"(bear={candle_probs[0]:.0%} flat={candle_probs[1]:.0%} bull={candle_probs[2]:.0%})"
+        )
+        reasons.append(
+            f"Predicted next range {pred_lo:.2f} – {pred_hi:.2f} (close≈{pred_cl:.2f})"
+        )
+        if ict_summary:
+            reasons.append(ict_summary)
         as_of = pd.Timestamp(frames["15m"]["time"].iloc[-1]).tz_convert("UTC").isoformat()
         return Signal(
             symbol=str(self.cfg.get("symbol", "XAUUSD")),
@@ -135,6 +159,14 @@ class SignalEngine:
             as_of=as_of,
             model_params=self.n_params,
             reasons=reasons,
+            candle_bias=CANDLE_LABELS[candle_cls],
+            p_bear=round(float(candle_probs[0]), 4),
+            p_flat=round(float(candle_probs[1]), 4),
+            p_bull=round(float(candle_probs[2]), 4),
+            pred_next_high=round(pred_hi, 3),
+            pred_next_low=round(pred_lo, 3),
+            pred_next_close=round(pred_cl, 3),
+            ict_summary=ict_summary,
         )
 
     def live_signal(self) -> Signal:
@@ -194,6 +226,7 @@ def _explain(out: dict[str, torch.Tensor], probs: np.ndarray, signal: str) -> li
     reasons = [
         f"Direction mix  sell={probs[0]:.0%} hold={probs[1]:.0%} buy={probs[2]:.0%}",
         f"Net signal {signal} from hierarchical 15m←1h←4h←1d GoldNet",
+        "Features include candle OHLC path, ICT structure (FVG/OB/BOS), and nested MTF alignment",
     ]
     if "vsn_15m" in out:
         w = out["vsn_15m"].squeeze(0).cpu().numpy()
@@ -203,7 +236,42 @@ def _explain(out: dict[str, torch.Tensor], probs: np.ndarray, signal: str) -> li
     return reasons
 
 
+def _ict_snapshot(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return ""
+    row = frame.iloc[-1]
+    bits = []
+    bias = float(row.get("ms_bias", 0.0) or 0.0)
+    if bias > 0.2:
+        bits.append("bullish structure")
+    elif bias < -0.2:
+        bits.append("bearish structure")
+    if abs(float(row.get("bos", 0.0) or 0.0)) > 0.5:
+        bits.append("BOS")
+    if abs(float(row.get("choch", 0.0) or 0.0)) > 0.5:
+        bits.append("CHOCH")
+    if float(row.get("fvg_up", 0.0) or 0.0) > 0:
+        bits.append("bullish FVG")
+    if float(row.get("fvg_down", 0.0) or 0.0) > 0:
+        bits.append("bearish FVG")
+    if float(row.get("liq_sweep_hi", 0.0) or 0.0) > 0.5:
+        bits.append("liquidity sweep high")
+    if float(row.get("liq_sweep_lo", 0.0) or 0.0) > 0.5:
+        bits.append("liquidity sweep low")
+    pd_ = float(row.get("premium_discount", 0.0) or 0.0)
+    if pd_ > 0.35:
+        bits.append("premium zone")
+    elif pd_ < -0.35:
+        bits.append("discount zone")
+    if not bits:
+        return ""
+    return "ICT now: " + ", ".join(bits)
+
+
 def signal_to_dict(sig: Signal) -> dict[str, Any]:
     data = asdict(sig)
     data["signal_with_price"] = f"{sig.signal} @ {sig.price:.2f}"
+    data["candle_with_range"] = (
+        f"{sig.candle_bias} → next {sig.pred_next_low:.2f}/{sig.pred_next_close:.2f}/{sig.pred_next_high:.2f}"
+    )
     return data
