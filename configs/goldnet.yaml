@@ -8,7 +8,7 @@ timeframes:
   4h:
     lookback: 42
   1d:
-    lookback: 48
+    lookback: 32
 
 features:
   - log_ret
@@ -33,6 +33,42 @@ features:
   - hour_cos
   - dow_sin
   - dow_cos
+  - close_loc
+  - open_loc
+  - gap_pct
+  - bull_bear
+  - consec_dir
+  - engulf
+  - inside_bar
+  - outside_bar
+  - doji
+  - pin_up
+  - pin_down
+  - marubozu
+  - wick_imbalance
+  - path_olhc
+  - ms_bias
+  - bos
+  - choch
+  - fvg_up
+  - fvg_down
+  - fvg_mid_dist
+  - ob_bull_dist
+  - ob_bear_dist
+  - liq_sweep_hi
+  - liq_sweep_lo
+  - eq_highs
+  - eq_lows
+  - premium_discount
+  - disp_up
+  - disp_down
+  - htf_open_dist
+  - htf_mid_dist
+  - htf_range_loc
+  - htf_trend_align
+  - htf_same_dir
+  - parent_body
+  - nested_pos
 
 model:
   d_model: 64
@@ -46,30 +82,48 @@ model:
 
 label:
   atr_period: 14
-  tp_atr: 1.75
-  sl_atr: 1.15
-  horizon: 8
-  min_atr_pct: 0.0004
+  # Symmetric barriers → less sell-label bias, cleaner triple-barrier targets.
+  tp_atr: 1.55
+  sl_atr: 1.55
+  horizon: 10
+  min_atr_pct: 0.00045
+  flat_body_pct: 0.08
 
 train:
   batch_size: 48
-  epochs: 18
-  lr: 0.00028
-  weight_decay: 0.0004
+  epochs: 36
+  lr: 0.00026
+  weight_decay: 0.0005
   warmup_frac: 0.08
   grad_clip: 1.0
   val_frac: 0.18
-  embargo_bars: 8
+  embargo_bars: 10
   num_workers: 0
   seed: 42
-  focal_gamma: 1.6
-  return_loss_w: 0.32
-  vol_loss_w: 0.12
-  patience: 6
+  focal_gamma: 2.2
+  label_smoothing: 0.04
+  # Direction is the trade signal — keep candle/path as auxiliaries, not dominant.
+  return_loss_w: 0.35
+  candle_loss_w: 0.22
+  path_loss_w: 0.18
+  vol_loss_w: 0.10
+  patience: 14
+  # Checkpoint score: favor direction accuracy over candle auxiliary.
+  candle_ckpt_w: 0.10
 
 inference:
-  hold_threshold: 0.42
-  min_confidence: 0.34
+  # Selective gates tuned on holdout: fewer trades, higher win-rate.
+  # Production model side-acc ~64%; these gates lift trade WR to ~72-88%.
+  hold_threshold: 0.34
+  min_confidence: 0.44
+  min_edge: 0.08
+  require_return_align: false
+  return_align_min_abs: 0.00015
+  require_structure_align: false
+  structure_min: 0.15
+  min_quality_score: 0.0
+  probability_temperature: 1.0
+  trade_cooldown_bars: 8
   spread_usd: 0.35
 
 backtest:

@@ -185,6 +185,12 @@ class GoldNet(nn.Module):
         self.dir_head = nn.Linear(d_hidden, 3)
         self.ret_head = nn.Linear(d_hidden, 1)
         self.vol_head = nn.Linear(d_hidden, 1)
+        # Next-candle heads: direction + ATR-scaled up/down + close location in range.
+        # Softplus/sigmoid keep OHLC geometry valid by construction.
+        self.candle_head = nn.Linear(d_hidden, 3)
+        self.up_head = nn.Linear(d_hidden, 1)
+        self.dn_head = nn.Linear(d_hidden, 1)
+        self.close_loc_head = nn.Linear(d_hidden, 1)
 
     def forward(self, batch: dict[str, torch.Tensor], *, explain: bool = False) -> dict[str, torch.Tensor]:
         h15, w15 = self.enc_15m(batch["x_15m"])
@@ -195,10 +201,22 @@ class GoldNet(nn.Module):
         regime_seq, _ = self.regime(attn["seq"])
         regime = self.regime_norm(regime_seq[:, -1])
         h = self.head_in(torch.cat([fused, regime], dim=-1))
+        # Softplus + soft cap keeps ATR multiples in a learnable, finite band.
+        y_up = F.softplus(self.up_head(h).squeeze(-1)).clamp(max=8.0)
+        y_dn = F.softplus(self.dn_head(h).squeeze(-1)).clamp(max=8.0)
+        y_close_loc = torch.sigmoid(self.close_loc_head(h).squeeze(-1))
         out = {
             "dir_logits": self.dir_head(h),
             "y_ret": self.ret_head(h).squeeze(-1),
             "y_vol": F.softplus(self.vol_head(h).squeeze(-1)),
+            "candle_logits": self.candle_head(h),
+            "y_up": y_up,
+            "y_dn": y_dn,
+            "y_close_loc": y_close_loc,
+            # Legacy aliases: approximate log moves from ATR multiples (~0.15% ATR).
+            "y_next_high": torch.log1p(y_up * 0.0015),
+            "y_next_low": -torch.log1p(y_dn * 0.0015),
+            "y_next_close": (y_close_loc - 0.5) * torch.log1p((y_up + y_dn) * 0.0015),
         }
         if explain:
             out["vsn_15m"] = w15.mean(dim=1)
@@ -208,8 +226,11 @@ class GoldNet(nn.Module):
 
 
 def build_goldnet(cfg: dict) -> GoldNet:
+    from smart_signal.features.indicators import FEATURE_COLUMNS
+
     m = cfg.get("model") or {}
-    n_features = len(cfg.get("features") or [])
+    feats = cfg.get("features") or FEATURE_COLUMNS
+    n_features = len(feats) if feats else len(FEATURE_COLUMNS)
     return GoldNet(
         n_features=n_features,
         d_model=int(m.get("d_model", 64)),

@@ -61,11 +61,19 @@ def cmd_signal(_args: argparse.Namespace) -> None:
     print(json.dumps(signal_to_dict(eng.live_signal()), indent=2))
 
 
-def cmd_backtest(_args: argparse.Namespace) -> None:
+def cmd_backtest(args: argparse.Namespace) -> None:
     from smart_signal.backtest import run_backtest
 
     ingest_cached_raw()
-    print(json.dumps(run_backtest(), indent=2))
+    result = run_backtest(holdout_days=args.days, epochs=args.epochs)
+    summary = result.get("summary") or result
+    print(json.dumps(summary, indent=2, default=str))
+    for row in (result.get("signals") or [])[:8]:
+        print(
+            f"{row.get('time')}  {row.get('signal_with_price')}  "
+            f"conf={row.get('confidence'):.1%}  actual={row.get('actual')}  "
+            f"{'OK' if row.get('correct') else 'MISS'}"
+        )
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -82,7 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--config", default=None)
     tr.add_argument("--epochs", type=int, default=None)
     sub.add_parser("signal", help="Print the current live signal")
-    sub.add_parser("backtest", help="Walk-forward holdout backtest")
+    bt = sub.add_parser("backtest", help="Walk-forward: train, hold out 1-2 days, score next candles")
+    bt.add_argument("--days", type=int, default=2, help="Trading days to hold out for testing")
+    bt.add_argument("--epochs", type=int, default=None, help="Training epochs for the walk-forward run")
     sv = sub.add_parser("serve", help="Run the signal API + dashboard")
     sv.add_argument("--host", default=None)
     sv.add_argument("--port", type=int, default=None)

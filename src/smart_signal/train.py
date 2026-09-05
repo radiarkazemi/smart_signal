@@ -69,8 +69,9 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
         source_15m = _load_training_15m()
     frames = build_timeframes(base_15m=source_15m)
     pub = data_dir() / "public"
-    from smart_signal.features.indicators import add_features
+    from smart_signal.features.indicators import FEATURE_COLUMNS, add_features
     from smart_signal.data.ohlcv import resample_ohlcv as _rs
+    from smart_signal.features.mtf_align import attach_mtf_alignment
 
     def _merge(primary: pd.DataFrame, extra: pd.DataFrame) -> pd.DataFrame:
         cols = ["time", "open", "high", "low", "close", "volume"]
@@ -81,12 +82,32 @@ def prepare_frames(cfg: dict[str, Any], source_15m: pd.DataFrame | None = None) 
         merged = merged.sort_values("time").drop_duplicates("time", keep="last")
         return add_features(merged.reset_index(drop=True))
 
+    merged_htf = False
     if (pub / "gc_1h.parquet").exists():
         extra_1h = load_parquet(pub / "gc_1h.parquet")
         frames["1h"] = _merge(frames["1h"], extra_1h)
         frames["4h"] = _merge(frames["4h"], _rs(extra_1h, "4h"))
+        merged_htf = True
     if (pub / "gc_1d.parquet").exists():
         frames["1d"] = _merge(frames["1d"], load_parquet(pub / "gc_1d.parquet"))
+        merged_htf = True
+    if merged_htf:
+        # Parent bars changed — rebuild weekly + nested MTF alignment onto children.
+        if "1d" in frames and not frames["1d"].empty:
+            frames["1w"] = add_features(
+                _rs(frames["1d"][["time", "open", "high", "low", "close", "volume"]], "1w")
+            )
+        frames = attach_mtf_alignment(frames)
+        for tf, df in list(frames.items()):
+            if df is None or df.empty:
+                continue
+            for col in FEATURE_COLUMNS:
+                if col not in df.columns:
+                    df[col] = 0.0
+            df[FEATURE_COLUMNS] = (
+                df[FEATURE_COLUMNS].replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+            )
+            frames[tf] = df
     return label_signal_frame(frames, cfg)
 
 
@@ -110,8 +131,9 @@ def run_epoch(
     train_cfg = cfg.get("train") or {}
     training = optimizer is not None
     model.train(training)
-    totals = {"loss": 0.0, "ce": 0.0, "ret": 0.0, "vol": 0.0, "acc": 0.0, "n": 0.0}
+    totals = {"loss": 0.0, "ce": 0.0, "ret": 0.0, "vol": 0.0, "candle": 0.0, "path": 0.0, "acc": 0.0, "n": 0.0}
     correct = 0
+    candle_correct = 0
     seen = 0
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
@@ -122,9 +144,12 @@ def run_epoch(
             outputs,
             batch,
             class_weight=weights,
-            gamma=float(train_cfg.get("focal_gamma", 1.6)),
-            return_w=float(train_cfg.get("return_loss_w", 0.32)),
-            vol_w=float(train_cfg.get("vol_loss_w", 0.12)),
+            gamma=float(train_cfg.get("focal_gamma", 2.0)),
+            return_w=float(train_cfg.get("return_loss_w", 0.35)),
+            vol_w=float(train_cfg.get("vol_loss_w", 0.10)),
+            candle_w=float(train_cfg.get("candle_loss_w", 0.30)),
+            path_w=float(train_cfg.get("path_loss_w", 0.22)),
+            label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
         )
         if training:
             loss.backward()
@@ -134,9 +159,10 @@ def run_epoch(
             optimizer.step()
         pred = outputs["dir_logits"].argmax(dim=-1)
         correct += int((pred == batch["y_dir"]).sum().item())
+        candle_correct += int((outputs["candle_logits"].argmax(dim=-1) == batch["y_candle"]).sum().item())
         seen += int(batch["y_dir"].size(0))
-        for k in ("loss", "ce", "ret", "vol"):
-            totals[k] += parts[k] * batch["y_dir"].size(0)
+        for k in ("loss", "ce", "ret", "vol", "candle", "path"):
+            totals[k] += parts.get(k, 0.0) * batch["y_dir"].size(0)
         totals["n"] += batch["y_dir"].size(0)
     n = max(totals["n"], 1.0)
     return {
@@ -144,7 +170,10 @@ def run_epoch(
         "ce": totals["ce"] / n,
         "ret": totals["ret"] / n,
         "vol": totals["vol"] / n,
+        "candle": totals["candle"] / n,
+        "path": totals["path"] / n,
         "acc": correct / max(seen, 1),
+        "candle_acc": candle_correct / max(seen, 1),
     }
 
 
@@ -220,9 +249,11 @@ def train_model(
         sched.step()
         row = {"epoch": epoch, "train": tr, "val": va, "lr": opt.param_groups[0]["lr"]}
         history.append(row)
-        improved = va["acc"] > best_acc + 0.002
+        candle_w = float(train_cfg.get("candle_ckpt_w", 0.15))
+        score = float(va["acc"] + candle_w * va.get("candle_acc", 0.0))
+        improved = score > (best_acc + 0.002)
         if improved:
-            best_acc = va["acc"]
+            best_acc = score
             stale = 0
             payload = {
                 "model": model.state_dict(),
@@ -238,8 +269,10 @@ def train_model(
         else:
             stale += 1
         print(
-            f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f}  "
-            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f}  best_acc={best_acc:.3f}",
+            f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f} "
+            f"candle={tr.get('candle_acc', 0):.3f}  "
+            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f} "
+            f"candle={va.get('candle_acc', 0):.3f}  best={best_acc:.3f}",
             flush=True,
         )
         if stale >= patience:
