@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Signal — XAUUSD GoldNet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #07080a;
+      --panel: #101318;
+      --line: #2a2418;
+      --gold: #d4b06a;
+      --gold2: #f3e1b0;
+      --muted: #9aa0a8;
+      --sell: #ef6b6b;
+      --buy: #3dd68c;
+      --hold: #c8c2b4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #2a2214 0%, transparent 50%),
+        radial-gradient(900px 500px at 100% 0%, #14201c 0%, transparent 45%),
+        var(--bg);
+      color: var(--gold2);
+      font-family: "IBM Plex Sans", sans-serif;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 28px 32px 8px;
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--gold);
+    }
+    header p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+    main {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+      padding: 22px;
+      max-width: 1200px;
+    }
+    .card {
+      background: linear-gradient(180deg, #16141c 0%, #0e1014 100%);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+    }
+    .price { font-family: "IBM Plex Mono", monospace; font-size: 42px; margin: 8px 0; }
+    .badge {
+      display: inline-block;
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      font-size: 20px;
+    }
+    .BUY { background: rgba(61,214,140,0.15); color: var(--buy); border: 1px solid var(--buy); }
+    .SELL { background: rgba(239,107,107,0.15); color: var(--sell); border: 1px solid var(--sell); }
+    .HOLD { background: rgba(200,194,180,0.1); color: var(--hold); border: 1px solid var(--hold); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+    .kv { background: #0b0d11; border-radius: 10px; padding: 12px; }
+    .kv span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .kv b { font-family: "IBM Plex Mono", monospace; font-size: 16px; }
+    .bar { height: 8px; background: #222; border-radius: 99px; overflow: hidden; display: flex; margin: 10px 0 18px; }
+    .bar i { display: block; height: 100%; }
+    .reasons { margin: 0; padding-left: 18px; color: #d9d3c7; }
+    .reasons li { margin: 8px 0; }
+    button {
+      background: var(--gold);
+      color: #16120a;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .err { color: var(--sell); white-space: pre-wrap; }
+    @media (max-width: 860px) {
+      main { grid-template-columns: 1fr; padding: 14px; }
+      header { padding: 18px; }
+      .price { font-size: 32px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Smart Signal</h1>
+      <p>GoldNet MTF · TCN + Transformer + cross-timeframe attention · XAUUSD</p>
+    </div>
+    <button id="refresh">Refresh signal</button>
+  </header>
+  <main>
+    <section class="card">
+      <div id="status">Loading live gold signal…</div>
+      <div class="price" id="price">—</div>
+      <div><span class="badge HOLD" id="badge">HOLD</span></div>
+      <p id="asof" style="color:var(--muted)"></p>
+      <div class="bar" id="mix"></div>
+      <div class="grid">
+        <div class="kv"><span>Confidence</span><b id="conf">—</b></div>
+        <div class="kv"><span>Expected move</span><b id="move">—</b></div>
+        <div class="kv"><span>Take profit</span><b id="tp">—</b></div>
+        <div class="kv"><span>Stop loss</span><b id="sl">—</b></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2 style="margin-top:0;color:var(--gold);font-size:16px;letter-spacing:0.08em;text-transform:uppercase">Model view</h2>
+      <ul class="reasons" id="reasons"></ul>
+      <div class="grid" style="margin-top:20px">
+        <div class="kv"><span>P(sell)</span><b id="ps">—</b></div>
+        <div class="kv"><span>P(hold)</span><b id="ph">—</b></div>
+        <div class="kv"><span>P(buy)</span><b id="pb">—</b></div>
+        <div class="kv"><span>Parameters</span><b id="params">—</b></div>
+      </div>
+      <pre id="metrics" style="color:var(--muted);font-size:12px;overflow:auto"></pre>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    function pct(x) { return (x * 100).toFixed(1) + "%"; }
+    async function load() {
+      $("status").textContent = "Fetching /signal …";
+      try {
+        const res = await fetch("/signal");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+        $("status").textContent = data.symbol + " · " + data.timeframe;
+        $("price").textContent = data.price.toFixed(2);
+        const b = $("badge");
+        b.textContent = data.signal;
+        b.className = "badge " + data.signal;
+        $("asof").textContent = "As of " + data.as_of;
+        $("conf").textContent = pct(data.confidence);
+        $("move").textContent = (data.expected_move_usd >= 0 ? "+" : "") + data.expected_move_usd.toFixed(2) + " USD";
+        $("tp").textContent = data.take_profit.toFixed(2);
+        $("sl").textContent = data.stop_loss.toFixed(2);
+        $("ps").textContent = pct(data.p_sell);
+        $("ph").textContent = pct(data.p_hold);
+        $("pb").textContent = pct(data.p_buy);
+        $("params").textContent = data.model_params.toLocaleString();
+        $("mix").innerHTML =
+          `<i style="width:${data.p_sell*100}%;background:#ef6b6b"></i>` +
+          `<i style="width:${data.p_hold*100}%;background:#8b8680"></i>` +
+          `<i style="width:${data.p_buy*100}%;background:#3dd68c"></i>`;
+        $("reasons").innerHTML = (data.reasons || []).map(r => `<li>${r}</li>`).join("");
+      } catch (e) {
+        $("status").innerHTML = `<span class="err">${e.message}</span>`;
+      }
+      try {
+        const m = await fetch("/metrics").then(r => r.json());
+        $("metrics").textContent = JSON.stringify(m, null, 2);
+      } catch {}
+    }
+    $("refresh").onclick = load;
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>
