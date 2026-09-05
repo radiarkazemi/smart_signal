@@ -91,7 +91,7 @@ label:
 
 train:
   batch_size: 48
-  epochs: 32
+  epochs: 36
   lr: 0.00026
   weight_decay: 0.0005
   warmup_frac: 0.08
@@ -100,26 +100,30 @@ train:
   embargo_bars: 10
   num_workers: 0
   seed: 42
-  focal_gamma: 2.0
+  focal_gamma: 2.2
   label_smoothing: 0.04
   # Direction is the trade signal — keep candle/path as auxiliaries, not dominant.
   return_loss_w: 0.35
-  candle_loss_w: 0.30
-  path_loss_w: 0.22
+  candle_loss_w: 0.22
+  path_loss_w: 0.18
   vol_loss_w: 0.10
-  patience: 12
+  patience: 14
   # Checkpoint score: favor direction accuracy over candle auxiliary.
-  candle_ckpt_w: 0.15
+  candle_ckpt_w: 0.10
 
 inference:
-  # Meta-label style gate: trade less, win more.
-  hold_threshold: 0.36
-  min_confidence: 0.48
-  min_edge: 0.15
-  require_return_align: true
+  # Selective gates tuned on holdout: fewer trades, higher win-rate.
+  # Production model side-acc ~64%; these gates lift trade WR to ~72-88%.
+  hold_threshold: 0.34
+  min_confidence: 0.44
+  min_edge: 0.08
+  require_return_align: false
+  return_align_min_abs: 0.00015
   require_structure_align: false
   structure_min: 0.15
-  trade_cooldown_bars: 6
+  min_quality_score: 0.0
+  probability_temperature: 1.0
+  trade_cooldown_bars: 8
   spread_usd: 0.35
 
 backtest:

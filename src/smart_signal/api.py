@@ -139,6 +139,8 @@ def create_app() -> FastAPI:
             out["backtest"].setdefault("holdout_days", (out.get("walkforward") or {}).get("holdout_days"))
             out["backtest"].setdefault("win_rate", (out.get("walkforward") or {}).get("trade_winrate"))
             out["backtest"].setdefault("direction_accuracy", (out.get("walkforward") or {}).get("direction_accuracy"))
+            out["backtest"].setdefault("raw_direction_accuracy", (out.get("walkforward") or {}).get("raw_direction_accuracy"))
+            out["backtest"].setdefault("side_accuracy", (out.get("walkforward") or {}).get("side_accuracy"))
         out["latest_signal"] = latest_signal()
         return out or {"detail": "no metrics yet"}
 

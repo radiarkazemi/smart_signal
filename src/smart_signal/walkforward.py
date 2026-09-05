@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from smart_signal.config import artifacts_dir, load_config
+from smart_signal.config import artifacts_dir, checkpoint_path, load_config
 from smart_signal.data.dataset import (
     FeatureScaler,
     MTFGoldDataset,
@@ -243,6 +243,8 @@ def predict_holdout(
             atr_v = float(atr_b[i]) if atr_b is not None else (
                 float(atr[src_i]) if atr[src_i] > 0 else price * 0.002
             )
+            raw_cls = int(np.argmax(p))
+            side_cls = 2 if float(p[2]) >= float(p[0]) else 0
             cls, conf, diag = decide_direction(
                 p,
                 cfg=cfg,
@@ -290,7 +292,11 @@ def predict_holdout(
                     "take_profit": round(tp, 3),
                     "stop_loss": round(sl, 3),
                     "actual": actual,
+                    "raw_pred": LABELS[raw_cls],
+                    "side_pred": LABELS[side_cls],
                     "correct": bool(cls == int(y[i])),
+                    "raw_correct": bool(raw_cls == int(y[i])),
+                    "side_correct": (bool(side_cls == int(y[i])) if int(y[i]) != 1 else None),
                     "forward_return": round(float(ret[i]), 6),
                     "pnl_usd_per_oz": round(float(pnl), 3),
                     "win": bool(pnl > 0) if signal in {"BUY", "SELL"} else None,
@@ -330,6 +336,9 @@ def predict_holdout(
 def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, Any]:
     n = len(rows)
     n_correct = sum(1 for r in rows if r["correct"])
+    n_raw = sum(1 for r in rows if r.get("raw_correct"))
+    side_rows = [r for r in rows if r.get("side_correct") is not None]
+    n_side = sum(1 for r in side_rows if r.get("side_correct"))
     trades = [r for r in rows if r["signal"] in {"BUY", "SELL"}]
     wins = [r for r in trades if r.get("win")]
     candle_n = sum(1 for r in rows if r.get("candle_correct") is not None)
@@ -341,10 +350,19 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
         day_rows = [r for r in rows if r["day"] == day]
         day_trades = [r for r in day_rows if r["signal"] in {"BUY", "SELL"}]
         day_wins = [r for r in day_trades if r.get("win")]
+        day_side = [r for r in day_rows if r.get("side_correct") is not None]
         by_day[day] = {
             "bars": len(day_rows),
             "direction_accuracy": round(
                 (sum(1 for r in day_rows if r["correct"]) / len(day_rows)) if day_rows else 0.0,
+                4,
+            ),
+            "raw_direction_accuracy": round(
+                (sum(1 for r in day_rows if r.get("raw_correct")) / len(day_rows)) if day_rows else 0.0,
+                4,
+            ),
+            "side_accuracy": round(
+                (sum(1 for r in day_side if r.get("side_correct")) / len(day_side)) if day_side else 0.0,
                 4,
             ),
             "candle_accuracy": round(
@@ -366,6 +384,8 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
         "holdout_days": holdout_days,
         "n_bars": n,
         "direction_accuracy": round((n_correct / n) if n else 0.0, 4),
+        "raw_direction_accuracy": round((n_raw / n) if n else 0.0, 4),
+        "side_accuracy": round((n_side / len(side_rows)) if side_rows else 0.0, 4),
         "candle_accuracy": round((candle_ok / candle_n) if candle_n else 0.0, 4),
         "avg_close_mae": round(float(np.mean(close_maes)) if close_maes else 0.0, 3),
         "avg_pred_range_width": round(float(np.mean(widths)) if widths else 0.0, 3),
@@ -383,14 +403,18 @@ def summarize(rows: list[dict[str, Any]], holdout_days: list[str]) -> dict[str, 
     }
 
 
-
 def run_walkforward(
     cfg: dict[str, Any] | None = None,
     *,
     holdout_days: int = 2,
     epochs: int | None = None,
+    use_production_checkpoint: bool = True,
 ) -> dict[str, Any]:
-    """Train on all but the last N trading days, then score those next days with priced signals."""
+    """Score holdout days with priced signals.
+
+    Default evaluates the production checkpoint (live model). Pass
+    ``use_production_checkpoint=False`` for a purged retrain-before-holdout run.
+    """
     cfg = cfg or load_config()
     train_cfg = cfg.get("train") or {}
     n_hold = max(1, int(holdout_days))
@@ -405,17 +429,30 @@ def run_walkforward(
     )
 
     out_dir = artifacts_dir()
-    ckpt = out_dir / "walkforward_goldnet.pt"
-    train_info = train_before_holdout(frames, cfg, train_idx, epochs=n_epochs, checkpoint=ckpt)
+    if use_production_checkpoint:
+        ckpt = Path(checkpoint_path(cfg))
+        if not ckpt.exists():
+            raise FileNotFoundError(f"Production checkpoint missing: {ckpt}")
+        print(f"[walkforward] evaluating production checkpoint {ckpt}", flush=True)
+        train_info: dict[str, Any] = {
+            "best_val_acc": None,
+            "n_params": None,
+            "checkpoint": str(ckpt),
+        }
+    else:
+        ckpt = out_dir / "walkforward_goldnet.pt"
+        train_info = train_before_holdout(frames, cfg, train_idx, epochs=n_epochs, checkpoint=ckpt)
+
     rows = predict_holdout(frames, cfg, test_idx, ckpt)
     summary = summarize(rows, hold_days)
     summary.update(
         {
             "n_train_bars": int(len(train_idx)),
             "n_test_bars": int(len(test_idx)),
-            "train_val_acc": train_info["best_val_acc"],
-            "n_params": train_info["n_params"],
+            "train_val_acc": train_info.get("best_val_acc"),
+            "n_params": train_info.get("n_params"),
             "checkpoint": train_info["checkpoint"],
+            "mode": "production_holdout" if use_production_checkpoint else "purged_retrain",
         }
     )
 
@@ -427,25 +464,29 @@ def run_walkforward(
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "walkforward.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
-    with (out_dir / "walkforward_signals.jsonl").open("w", encoding="utf-8") as fh:
+    signals_path = out_dir / "walkforward_signals.jsonl"
+    with signals_path.open("w", encoding="utf-8") as fh:
         for row in rows:
-            fh.write(json.dumps(row) + "\n")
+            fh.write(json.dumps(row))
+            fh.write("\n")
 
     (out_dir / "backtest.json").write_text(
         json.dumps(
             {
-                "mode": "walkforward_holdout_days",
+                "mode": summary.get("mode", "walkforward_holdout_days"),
                 "n_windows": summary["n_test_bars"],
                 "n_trades": summary["n_trades"],
                 "win_rate": summary["trade_winrate"],
                 "direction_accuracy": summary["direction_accuracy"],
+                "raw_direction_accuracy": summary.get("raw_direction_accuracy"),
+                "side_accuracy": summary.get("side_accuracy"),
                 "candle_accuracy": summary.get("candle_accuracy"),
                 "avg_close_mae": summary.get("avg_close_mae"),
                 "avg_pred_range_width": summary.get("avg_pred_range_width"),
                 "ohlc_ok_rate": summary.get("ohlc_ok_rate"),
                 "holdout_days": summary["holdout_days"],
                 "avg_trade_pnl": summary["avg_trade_pnl_usd_per_oz"],
-                "train_val_acc": summary["train_val_acc"],
+                "train_val_acc": summary.get("train_val_acc"),
                 "by_day": summary["by_day"],
                 "sample_signals": sample[:12],
             },

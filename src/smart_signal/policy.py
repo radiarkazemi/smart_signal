@@ -27,16 +27,24 @@ def decide_direction(
     Returns ``(class_id, confidence, diagnostics)``.
     """
     inf = (cfg or {}).get("inference") or {}
-    hold_thr = float(inf.get("hold_threshold", 0.38))
-    min_conf = float(inf.get("min_confidence", 0.48))
-    min_edge = float(inf.get("min_edge", 0.15))
-    require_ret = bool(inf.get("require_return_align", True))
+    hold_thr = float(inf.get("hold_threshold", 0.34))
+    min_conf = float(inf.get("min_confidence", 0.44))
+    min_edge = float(inf.get("min_edge", 0.08))
+    require_ret = bool(inf.get("require_return_align", False))
+    # Only enforce return-head agreement when |expected return| is meaningful.
+    ret_min_abs = float(inf.get("return_align_min_abs", 0.00015))
     require_structure = bool(inf.get("require_structure_align", False))
     structure_min = float(inf.get("structure_min", 0.15))
+    min_quality = float(inf.get("min_quality_score", 0.0))
+    temperature = float(inf.get("probability_temperature", 1.0))
 
     p = np.asarray(probs, dtype=np.float64).reshape(-1)
     if p.size != 3:
         raise ValueError(f"expected 3 class probs, got shape {p.shape}")
+    p = np.clip(p, 1e-12, None)
+    if temperature > 0 and abs(temperature - 1.0) > 1e-6:
+        logits = np.log(p)
+        p = np.exp(logits / temperature)
     p = p / max(float(p.sum()), 1e-12)
 
     p_sell, p_hold, p_buy = float(p[0]), float(p[1]), float(p[2])
@@ -45,6 +53,7 @@ def decide_direction(
     edge = abs(p_buy - p_sell)
     side = 2 if p_buy >= p_sell else 0
     side_conf = float(max(p_buy, p_sell))
+    quality = side_conf * edge
 
     diagnostics = {
         "p_sell": p_sell,
@@ -53,19 +62,23 @@ def decide_direction(
         "edge": edge,
         "raw_cls": float(raw),
         "side_conf": side_conf,
+        "quality": float(quality),
     }
 
     # Soft hold mass or weak directional confidence → stand aside.
     if p_hold >= hold_thr or side_conf < min_conf or edge < min_edge:
         return 1, float(max(p_hold, side_conf)), diagnostics
+    if quality < min_quality:
+        return 1, side_conf, diagnostics
 
-    # Expected-return head must agree with the chosen side (cheap meta-filter).
+    # Expected-return head agreement (optional; only when move magnitude is material).
     if require_ret and expected_log_return is not None:
         er = float(expected_log_return)
-        if side == 2 and er < 0:
-            return 1, side_conf, diagnostics
-        if side == 0 and er > 0:
-            return 1, side_conf, diagnostics
+        if abs(er) >= ret_min_abs:
+            if side == 2 and er < 0:
+                return 1, side_conf, diagnostics
+            if side == 0 and er > 0:
+                return 1, side_conf, diagnostics
 
     # Optional ICT / HTF structure agreement (off by default; enable in config).
     if require_structure:
