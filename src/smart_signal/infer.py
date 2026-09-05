@@ -131,6 +131,10 @@ class SignalEngine:
         pred_hi = float(price * np.exp(float(out["y_next_high"].squeeze().cpu())))
         pred_lo = float(price * np.exp(float(out["y_next_low"].squeeze().cpu())))
         pred_cl = float(price * np.exp(float(out["y_next_close"].squeeze().cpu())))
+        # Keep OHLC geometry coherent for the dashboard / traders.
+        if pred_lo > pred_hi:
+            pred_lo, pred_hi = pred_hi, pred_lo
+        pred_cl = float(min(max(pred_cl, pred_lo), pred_hi))
         ict_summary = _ict_snapshot(frames["15m"])
         reasons.append(
             f"Next candle {CANDLE_LABELS[candle_cls]} "
