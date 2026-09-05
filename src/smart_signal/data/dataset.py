@@ -47,6 +47,35 @@ def _lookbacks(cfg: dict[str, Any]) -> dict[str, int]:
     return {tf: int((tfs.get(tf) or {}).get("lookback", 64)) for tf in HTF_ORDER}
 
 
+@dataclass
+class FeatureScaler:
+    mean: np.ndarray
+    std: np.ndarray
+
+    def transform(self, x: np.ndarray) -> np.ndarray:
+        z = (x - self.mean) / self.std
+        return np.clip(z, -8.0, 8.0).astype(np.float32)
+
+    def state_dict(self) -> dict[str, list[float]]:
+        return {"mean": self.mean.tolist(), "std": self.std.tolist()}
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any] | None) -> "FeatureScaler | None":
+        if not state:
+            return None
+        return cls(
+            mean=np.asarray(state["mean"], dtype=np.float32),
+            std=np.asarray(state["std"], dtype=np.float32),
+        )
+
+
+def fit_scaler(frames: dict[str, pd.DataFrame], indices: np.ndarray) -> FeatureScaler:
+    mat = feature_matrix(frames["15m"])[np.asarray(indices, dtype=np.int64)]
+    mean = mat.mean(axis=0)
+    std = np.maximum(mat.std(axis=0), 1e-6)
+    return FeatureScaler(mean.astype(np.float32), std.astype(np.float32))
+
+
 def _time_ns(frame: pd.DataFrame) -> np.ndarray:
     s = pd.to_datetime(frame["time"], utc=True)
     return np.asarray(s.astype("int64").to_numpy(), dtype=np.int64)
@@ -104,18 +133,25 @@ class MTFGoldDataset(Dataset):
         frames: dict[str, pd.DataFrame],
         cfg: dict[str, Any],
         indices: np.ndarray,
+        scaler: FeatureScaler | None = None,
     ) -> None:
         self.cfg = cfg
         self.lookbacks = _lookbacks(cfg)
         self.indices = np.asarray(indices, dtype=np.int64)
         self.times = {tf: _time_ns(frames[tf]) for tf in HTF_ORDER}
-        self.feat = {tf: feature_matrix(frames[tf]) for tf in HTF_ORDER}
+        self.scaler = scaler
+        self.feat = {tf: self._scale(feature_matrix(frames[tf])) for tf in HTF_ORDER}
         sig = frames["15m"]
         self.y_dir = sig["y_dir"].to_numpy(dtype=np.int64)
         self.y_ret = sig["y_ret"].to_numpy(dtype=np.float32)
         self.y_vol = sig["y_vol"].to_numpy(dtype=np.float32)
         self.close = sig["close"].to_numpy(dtype=np.float32)
         self.sig_times = _time_ns(sig)
+
+    def _scale(self, mat: np.ndarray) -> np.ndarray:
+        if self.scaler is None:
+            return mat
+        return self.scaler.transform(mat)
 
     def __len__(self) -> int:
         return int(len(self.indices))
@@ -156,16 +192,22 @@ def collate_batch(items: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tenso
     return {k: torch.stack([it[k] for it in items], dim=0) for k in keys}
 
 
-def last_windows(frames: dict[str, pd.DataFrame], cfg: dict[str, Any]) -> dict[str, torch.Tensor] | None:
+def last_windows(
+    frames: dict[str, pd.DataFrame],
+    cfg: dict[str, Any],
+    scaler: FeatureScaler | None = None,
+) -> dict[str, torch.Tensor] | None:
     lbs = _lookbacks(cfg)
     xs: dict[str, torch.Tensor] = {}
     t = int(_time_ns(frames["15m"])[-1])
     for tf in HTF_ORDER:
         feat = feature_matrix(frames[tf])
+        if scaler is not None:
+            feat = scaler.transform(feat)
         times = _time_ns(frames[tf])
         pos = int(np.searchsorted(times, t, side="right") - 1)
         if pos < lbs[tf] - 1:
             return None
-        sl = feat[pos - lbs[tf] + 1 : pos + 1]
+        sl = np.ascontiguousarray(feat[pos - lbs[tf] + 1 : pos + 1])
         xs[f"x_{tf}"] = torch.from_numpy(sl).unsqueeze(0)
     return xs

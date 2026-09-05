@@ -16,6 +16,7 @@ from smart_signal.data.dataset import (
     MTFGoldDataset,
     build_timeframes,
     collate_batch,
+    fit_scaler,
     label_signal_frame,
     time_split,
     valid_indices,
@@ -171,15 +172,24 @@ def train_model(
         float(train_cfg.get("val_frac", 0.18)),
         int(train_cfg.get("embargo_bars", 8)),
     )
-    train_ds = MTFGoldDataset(frames, cfg, train_idx)
-    val_ds = MTFGoldDataset(frames, cfg, val_idx)
+    scaler = fit_scaler(frames, train_idx)
+    train_ds = MTFGoldDataset(frames, cfg, train_idx, scaler=scaler)
+    val_ds = MTFGoldDataset(frames, cfg, val_idx, scaler=scaler)
+    y_train = frames["15m"]["y_dir"].to_numpy()[train_idx]
+    class_n = np.bincount(y_train, minlength=3).astype(np.float64)
+    sample_w = 1.0 / np.maximum(class_n[y_train], 1.0)
+    sampler = torch.utils.data.WeightedRandomSampler(
+        torch.as_tensor(sample_w, dtype=torch.double),
+        num_samples=len(train_ds),
+        replacement=True,
+    )
     loader_kw = dict(
         batch_size=int(train_cfg.get("batch_size", 48)),
         num_workers=int(train_cfg.get("num_workers", 0)),
         collate_fn=collate_batch,
         drop_last=False,
     )
-    train_loader = DataLoader(train_ds, shuffle=True, **loader_kw)
+    train_loader = DataLoader(train_ds, sampler=sampler, **loader_kw)
     val_loader = DataLoader(val_ds, shuffle=False, **loader_kw)
     model = build_goldnet(cfg).to(device)
     opt = torch.optim.AdamW(
@@ -197,11 +207,10 @@ def train_model(
         return 0.5 * (1.0 + math.cos(math.pi * progress))
 
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_at)
-    y_train = frames["15m"]["y_dir"].to_numpy()[train_idx]
     weights = class_weights(y_train, device)
     ckpt = checkpoint or checkpoint_path(cfg)
     ckpt.parent.mkdir(parents=True, exist_ok=True)
-    best = float("inf")
+    best_acc = -1.0
     stale = 0
     history = []
     patience = int(train_cfg.get("patience", 5))
@@ -211,13 +220,14 @@ def train_model(
         sched.step()
         row = {"epoch": epoch, "train": tr, "val": va, "lr": opt.param_groups[0]["lr"]}
         history.append(row)
-        improved = va["loss"] < best - 1e-4
+        improved = va["acc"] > best_acc + 0.002
         if improved:
-            best = va["loss"]
+            best_acc = va["acc"]
             stale = 0
             payload = {
                 "model": model.state_dict(),
                 "config": {k: v for k, v in cfg.items() if not str(k).startswith("_")},
+                "scaler": scaler.state_dict(),
                 "val": va,
                 "n_train": len(train_ds),
                 "n_val": len(val_ds),
@@ -229,14 +239,14 @@ def train_model(
             stale += 1
         print(
             f"epoch {epoch:02d}  train_loss={tr['loss']:.4f} acc={tr['acc']:.3f}  "
-            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f}  best={best:.4f}",
+            f"val_loss={va['loss']:.4f} acc={va['acc']:.3f}  best_acc={best_acc:.3f}",
             flush=True,
         )
         if stale >= patience:
             print(f"early stop at epoch {epoch}", flush=True)
             break
     metrics = {
-        "best_val_loss": best,
+        "best_val_acc": best_acc,
         "history": history,
         "n_train": len(train_ds),
         "n_val": len(val_ds),

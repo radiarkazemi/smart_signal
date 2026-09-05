@@ -41,7 +41,7 @@ model:
   n_tcn_layers: 4
   tcn_kernel: 3
   n_transformer_layers: 2
-  dropout: 0.18
+  dropout: 0.12
   gru_layers: 1
 
 label:
@@ -65,11 +65,11 @@ train:
   focal_gamma: 1.6
   return_loss_w: 0.32
   vol_loss_w: 0.12
-  patience: 5
+  patience: 6
 
 inference:
   hold_threshold: 0.42
-  min_confidence: 0.36
+  min_confidence: 0.34
   spread_usd: 0.35
 
 backtest:

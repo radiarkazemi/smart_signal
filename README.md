@@ -23,7 +23,9 @@ Live and historical FOREXCOM XAUUSD candles already sit on the gold VPS (`cp_fet
 
 FOREXCOM 1-minute history on the VPS is roughly two weeks. Training therefore **pretrains on COMEX gold futures (`GC=F`)** (multi-year hourly + 60d 15m) and applies the same model to live FOREXCOM XAUUSD. Directional structure transfers; the live path always reads the VPS.
 
-The VPS is 1 vCPU / 2 GB RAM. **Train on a larger machine** (this repo’s default). Inference of the ~1.0M-parameter GoldNet checkpoint is light enough to serve.
+A trained checkpoint (`models/goldnet.pt`, ~1.01M params) is included. On a time-based holdout it reached **56.9% 3-class accuracy** (majority baseline ~53.5%). Non-overlapping filtered trades on that same holdout: 87 trades, 63% win rate — this is a short window, not a live performance guarantee.
+
+The gold VPS last bar at training time was Friday 2026-09-04 20:59 UTC (weekend: the live API correctly returns **HOLD**).
 
 Do **not** commit SSH passwords. Put secrets only in a local `.env` (see `.env.example`).
 

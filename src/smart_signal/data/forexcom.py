@@ -13,7 +13,7 @@ from smart_signal.data.ohlcv import bars_from_records, jsonl_to_frame, save_parq
 
 DEFAULT_API_BASE = "http://185.222.163.116/crypto-api"
 DEFAULT_BARS_URL = "http://185.222.163.116/trh-api/bars"
-TIMEOUT = 45.0
+TIMEOUT = 8.0
 
 
 def api_base() -> str:

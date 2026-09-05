@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 
 from smart_signal.config import checkpoint_path, load_config
-from smart_signal.data.dataset import build_timeframes, last_windows
+from smart_signal.data.dataset import FeatureScaler, build_timeframes, last_windows
 from smart_signal.data.forexcom import fetch_history, fetch_last_price, fetch_live_1m_bars
 from smart_signal.data.ohlcv import load_parquet, resample_ohlcv
 from smart_signal.config import data_dir
@@ -51,9 +51,11 @@ class SignalEngine:
         path = ckpt_path or checkpoint_path(self.cfg)
         self.loaded = False
         self.ckpt_path = path
+        self.scaler = None
         if path.exists():
             payload = torch.load(path, map_location=self.device, weights_only=False)
             self.model.load_state_dict(payload["model"])
+            self.scaler = FeatureScaler.from_state(payload.get("scaler"))
             self.loaded = True
 
     def _frames_from_1m(self, df_1m: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -73,7 +75,7 @@ class SignalEngine:
 
     @torch.no_grad()
     def predict_frames(self, frames: dict[str, pd.DataFrame]) -> Signal:
-        batch = last_windows(frames, self.cfg)
+        batch = last_windows(frames, self.cfg, scaler=self.scaler)
         if batch is None:
             raise RuntimeError("Not enough bars to form a multi-timeframe window")
         batch = {k: v.to(self.device) for k, v in batch.items()}
@@ -147,21 +149,27 @@ def _merge_tf(primary: pd.DataFrame, extra: pd.DataFrame) -> pd.DataFrame:
 
 
 def _load_live_1m() -> pd.DataFrame:
+    cached = data_dir() / "forexcom" / "xauusd_1m.parquet"
+    live = pd.DataFrame()
     try:
         live = fetch_live_1m_bars(limit=2000)
-        if len(live) >= 200:
-            return live
     except Exception:
         live = pd.DataFrame()
+    if cached.exists():
+        hist = load_parquet(cached)
+        if live.empty:
+            return hist
+        merged = pd.concat([hist, live], ignore_index=True)
+        merged = merged.sort_values("time").drop_duplicates("time", keep="last").reset_index(drop=True)
+        return merged
+    if not live.empty:
+        return live
     try:
-        hist = fetch_history("xauusd", "1m", max_pages=4, limit=2000)
+        hist = fetch_history("xauusd", "1m", max_pages=1, limit=2000)
         if not hist.empty:
             return hist
     except Exception:
         pass
-    cached = data_dir() / "forexcom" / "xauusd_1m.parquet"
-    if cached.exists():
-        return load_parquet(cached)
     raise RuntimeError("Unable to load live XAUUSD 1m bars from server or cache")
 
 
